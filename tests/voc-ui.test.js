@@ -570,7 +570,8 @@ describe("진행 상태 (F-08, R-14) — Step 1 임시 버전", () => {
       click(stepBtn(ctx, "유관부서 전달"));
       assertUntouched($, snap);
       const touched = new Set(c.lastChanges.filter((x) => x.type !== "REBIND").map((x) => x.path[0]));
-      for (const idx of [0, 1, 2, 4]) assert(!touched.has(idx), `자식 ${idx}번은 건드리지 않았다`);
+      // 화면 순서: 0 머리글, 1 필터, 2 요약, 3 진행 현황(바뀐다), 4 신호 목록(카드의 상태 줄이 바뀐다), 5 상세
+      for (const idx of [0, 1, 2, 5]) assert(!touched.has(idx), `자식 ${idx}번은 건드리지 않았다`);
     });
   });
 
