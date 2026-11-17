@@ -149,9 +149,11 @@ const settle = async () => { for (let i = 0; i < 8; i++) await tick(0); };
 const text = (el) => el.textContent.replace(/\s+/g, " ").trim();
 
 /** 서비스를 흉내 낸 api: 같은 query.js로 응답을 만들고, 호출을 기록한다 */
-function fakeService(data, { statuses = {}, save } = {}) {
-  const calls = { overview: [], alerts: [], detail: [], history: [], save: [] };
+function fakeService(data, { statuses = {}, save, demo } = {}) {
+  const calls = { overview: [], alerts: [], detail: [], history: [], save: [], demo: [] };
   const map = { ...statuses };
+  // 시연용 DBMS 제어를 흉내 낸다 (demo: { running, stopError, startError }). 넘기지 않으면 서비스가 시연 제어를 켜지 않은 것과 같다
+  const dbms = demo ? { running: demo.running !== false } : null;
   // gate.closed가 되면 조회가 끝나지 않는 것처럼 둔다: 시험이 끝난 뒤에도 자동 갱신 타이머는 남으므로(화면을 닫는 방법이 없다) 무거운 계산을 멈추려고
   const gate = { closed: false };
   const guard = (fn) => (...args) => (gate.closed ? new Promise(() => {}) : fn(...args));
@@ -167,17 +169,36 @@ function fakeService(data, { statuses = {}, save } = {}) {
       (map[id] ??= []).push({ status, at });
       return { status, at };
     },
+    ...(dbms
+      ? {
+          demo: {
+            state: async () => (calls.demo.push("state"), { enabled: true, running: dbms.running }),
+            stop: async () => {
+              calls.demo.push("stop");
+              if (demo.stopError) throw new ApiError(demo.stopError, 409);
+              dbms.running = false;
+              return { enabled: true, running: false };
+            },
+            start: async () => {
+              calls.demo.push("start");
+              if (demo.startError) throw new ApiError(demo.startError, 500);
+              dbms.running = true;
+              return { enabled: true, running: true };
+            },
+          },
+        }
+      : {}),
   };
-  return { api, calls, map, gate };
+  return { api, calls, map, gate, dbms };
 }
 
-async function withRemote(fn, { statuses, save, refreshMs, dataset } = {}) {
+async function withRemote(fn, { statuses, save, refreshMs, dataset, demo } = {}) {
   const data = dataset ?? (await loadSample());
   const box = document.createElement("div");
   sandbox.appendChild(box);
   let service;
   try {
-    service = fakeService(data, { statuses, save });
+    service = fakeService(data, { statuses, save, demo });
     const c = mountApp(box, { api: service.api, refreshMs });
     await settle();
     await fn({ box, data, ...service, $: (s) => box.querySelector(s), $$: (s) => [...box.querySelectorAll(s)] });
@@ -345,5 +366,78 @@ describe("통합 모드 화면 (App의 api prop, S4-04 · S4-14)", () => {
     } finally {
       box.remove();
     }
+  });
+});
+
+describe("시연용 DBMS 제어 버튼 (서비스를 --demo-controls 로 켰을 때만)", () => {
+  const press = (box, label) => [...box.querySelectorAll(".demo-controls button")].find((b) => b.textContent === label).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  it("시연 제어가 없으면 버튼이 없다 (평소 실행에는 보이지 않는다)", async () => {
+    await withRemote(({ $ }) => assert($(".demo-controls") === null));
+  });
+  it("켜져 있으면 'DBMS 켜짐'과 함께 종료 버튼만 누를 수 있다", async () => {
+    await withRemote(({ $, $$ }) => {
+      eq(text($(".demo-controls .badge-db")), "DBMS 켜짐");
+      const [stop, start] = $$(".demo-controls button");
+      eq(stop.textContent, "DBMS 종료");
+      eq(start.textContent, "DBMS 시작");
+      assert(!stop.disabled && start.disabled);
+    }, { demo: { running: true } });
+  });
+  it("종료를 누르면 서비스에 종료를 요청하고 'DBMS 꺼짐'으로 바뀌며 시작 버튼이 열린다", async () => {
+    await withRemote(async ({ box, $, $$, calls, dbms }) => {
+      press(box, "DBMS 종료");
+      await settle();
+      assert(calls.demo.includes("stop"));
+      eq(dbms.running, false);
+      eq(text($(".demo-controls .badge-db")), "DBMS 꺼짐");
+      assert($(".demo-controls .badge-db").className.includes("is-down"));
+      const [stop, start] = $$(".demo-controls button");
+      assert(stop.disabled && !start.disabled);
+    }, { demo: { running: true } });
+  });
+  it("꺼져 있는 동안은 자동 갱신을 멈춘다 (갱신이 실패해 화면이 오류로 바뀌지 않게)", async () => {
+    await withRemote(async ({ box, $, calls }) => {
+      await tick(100); // 켜져 있는 동안은 계속 다시 받는다
+      assert(calls.overview.length >= 2, `켜져 있을 때 자동 갱신 (${calls.overview.length})`);
+      press(box, "DBMS 종료");
+      await settle();
+      const atStop = calls.overview.length;
+      await tick(200);
+      eq(calls.overview.length, atStop, "꺼진 동안은 다시 받지 않는다");
+      assert(!$(".status-error"), "오류 화면으로 바뀌지 않는다");
+    }, { refreshMs: 30, demo: { running: true } });
+  });
+  it("꺼진 동안 저장하면 저장 안 됨 안내가 나오고, 시작하면 안내가 지워지고 화면을 바로 다시 받는다", async () => {
+    await withRemote(async ({ box, $, $$, calls }) => {
+      press(box, "DBMS 종료");
+      await settle();
+      $$(".status-steps button").find((b) => b.textContent === "분석 중").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await settle();
+      assert(text($(".progress .notice")).includes("저장되지 않았습니다"));
+      eq($(".status-steps .current").textContent, "확인 필요", "상태는 그대로");
+      const before = calls.overview.length;
+      press(box, "DBMS 시작");
+      await settle();
+      assert(calls.demo.includes("start"));
+      eq(text($(".demo-controls .badge-db")), "DBMS 켜짐");
+      assert(calls.overview.length > before, "시작하면 화면을 바로 다시 받는다");
+      assert($(".progress .notice") === null, "저장 실패 안내가 지워진다");
+    }, { demo: { running: true }, save: async () => { throw new SaveError("DBMS 서버에 연결할 수 없습니다.", "not_saved"); } });
+  });
+  it("종료가 실패하면 이유를 보여 주고 상태는 바꾸지 않는다", async () => {
+    await withRemote(async ({ box, $ }) => {
+      press(box, "DBMS 종료");
+      await settle();
+      assert(text($(".demo-message")).includes("DBMS가 아니라서"));
+      eq(text($(".demo-controls .badge-db")), "DBMS 켜짐");
+    }, { demo: { running: true, stopError: "포트를 쓰는 프로그램이 DBMS가 아니라서 종료하지 않았습니다." } });
+  });
+  it("DBMS를 화면 밖에서 켜고 꺼도 버튼 상태가 따라간다", async () => {
+    await withRemote(async ({ $, dbms }) => {
+      eq(text($(".demo-controls .badge-db")), "DBMS 켜짐");
+      dbms.running = false; // 화면 밖에서 DBMS가 꺼졌다
+      await tick(120);
+      eq(text($(".demo-controls .badge-db")), "DBMS 꺼짐");
+    }, { refreshMs: 30, demo: { running: true } });
   });
 });

@@ -7,6 +7,8 @@
 #   SIMULATE=1 SIMULATE_ARGS="--burst 배송" ./tools/start-all.sh   # 시작할 때 '배송' 25건이 한꺼번에 들어와 새 이상 신호가 생긴다
 #                                         (SIMULATE_ARGS에는 simulate-intake.py의 옵션을 그대로 쓴다. 기본은 옵션 없음)
 #
+# SIMULATE=1(또는 DEMO_CONTROLS=1)이면 화면 위쪽에 "DBMS 종료 / 시작" 버튼도 나온다: DBMS를 강제로 종료하고 다시 켜서 장애 복구를 보여 주는 시연용이다.
+#   (종료는 프로세스를 갑자기 죽이는 것이라 데이터 파일은 지워지지 않는다. 기본은 꺼져 있어서 버튼이 없다)
 # SIMULATE는 실제 db/data에 문의를 추가한다 (지우거나 고치지 않는다). 그래서 기본은 꺼져 있다.
 # 처음이면 빌드와 데이터 적재도 한다. 이미 있는 데이터는 덮어쓰지 않는다.
 # 포트: DBMS 8080, Redis 6380, VOC 서비스 8001 (이미 쓰는 포트가 있으면 시작하지 않는다)
@@ -82,7 +84,11 @@ if [ -z "${NO_REDIS:-}" ]; then
   kill -0 "${PIDS[1]}" 2>/dev/null || fail "Redis 가 시작되지 않았습니다 (로그: $LOG_DIR/redis.log)"
 fi
 
-node tools/voc-service.mjs --port "$PROXY_PORT" --db-url "http://127.0.0.1:$DB_PORT" --redis-url "http://127.0.0.1:$REDIS_PORT" >"$LOG_DIR/proxy.log" 2>&1 &
+DEMO_ARGS=()
+if [ -n "${SIMULATE:-}" ] || [ -n "${DEMO_CONTROLS:-}" ]; then
+  DEMO_ARGS=(--demo-controls --db-bin "$DB_BIN" --db-data-dir "$DATA_DIR")
+fi
+node tools/voc-service.mjs --port "$PROXY_PORT" --db-url "http://127.0.0.1:$DB_PORT" --redis-url "http://127.0.0.1:$REDIS_PORT" ${DEMO_ARGS[@]+"${DEMO_ARGS[@]}"} >"$LOG_DIR/proxy.log" 2>&1 &  # 빈 배열도 set -u(macOS 기본 bash 3.2)에서 안전하게 펼친다
 PIDS+=($!)
 wait_http "http://127.0.0.1:$PROXY_PORT/api/v1/overview" "VOC 서비스"
 
@@ -101,7 +107,9 @@ echo "  화면   http://localhost:$PROXY_PORT/voc.html"
 echo "  로그   $LOG_DIR/{dbms,redis,proxy}.log"
 if [ -n "${SIMULATE:-}" ]; then
   echo "  접수 시연 켜짐: 문의가 DB에 들어옵니다 (실제 $DATA_DIR 에 추가). 접수 로그: tail -f $LOG_DIR/intake.log"
+  echo "  화면 위쪽에 'DBMS 종료 / 시작' 버튼이 있습니다 (장애 복구 시연용). DBMS를 다시 켜면 이 창을 닫을 때 같이 꺼집니다"
 else
+  [ -n "${DEMO_CONTROLS:-}" ] && echo "  화면 위쪽에 'DBMS 종료 / 시작' 버튼이 있습니다 (장애 복구 시연용)"
   echo "  접수 시연은 꺼져 있습니다. 같이 켜려면 Ctrl-C 후  SIMULATE=1 ./tools/start-all.sh  (새 신호까지: SIMULATE=1 SIMULATE_ARGS=\"--burst 배송\" ./tools/start-all.sh)"
 fi
 head -1 "$LOG_DIR/proxy.log"

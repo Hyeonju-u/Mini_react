@@ -45,7 +45,31 @@ export function createServiceApi(base = "api/v1", fetchFn = (...args) => fetch(.
     return { body, ms: Math.round(performance.now() - startedAt) };
   }
 
+  // 시연 제어: 서비스를 --demo-controls 로 켰을 때만 있다. 꺼져 있거나 닿지 못하면 enabled:false (화면에 버튼을 만들지 않는다)
+  async function demoState() {
+    try {
+      const response = await fetchFn(`${base}/demo/dbms`);
+      const body = await readJson(response);
+      return response.ok && body ? body : { enabled: false };
+    } catch {
+      return { enabled: false };
+    }
+  }
+  async function demoPost(action) {
+    let response;
+    try {
+      // X-Demo-Control: 같은 사이트의 화면이 직접 보낸 요청임을 서버가 확인하는 표시 (다른 웹사이트는 이 헤더를 붙일 수 없다)
+      response = await fetchFn(`${base}/demo/dbms/${action}`, { method: "POST", headers: { "X-Demo-Control": "1" } });
+    } catch {
+      throw new ApiError("서버에 연결하지 못했습니다.", 0);
+    }
+    const body = await readJson(response);
+    if (!response.ok) throw new ApiError(typeof body?.error === "string" ? body.error : `요청이 실패했습니다. (HTTP ${response.status})`, response.status);
+    return body;
+  }
+
   return {
+    demo: { state: demoState, stop: () => demoPost("stop"), start: () => demoPost("start") },
     overview: (filters) => get(`/overview?${toQuery(filters)}`),
     alerts: (filters, { status, page, pageSize } = {}) => get(`/alerts?${toQuery(filters, { status, page, pageSize })}`),
     detail: (id, filters, evidencePage) => get(`/alerts/${encodeURIComponent(id)}?${toQuery(filters, { evidencePage })}`),

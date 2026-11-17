@@ -39,7 +39,8 @@ export function StatusView({ status, message }) {
 // ---------------------------------------------------------------- ① Header
 const SERVED_LABEL = { redis: "Redis 캐시", dbms: "DBMS 직접" };
 
-export function Header({ isGenerated, served, refreshSeconds = 0 }) {
+// demo: 시연용 DBMS 제어 { enabled, running, busy, message }. enabled가 아니면 버튼을 그리지 않는다 (서비스를 --demo-controls 로 켠 시연에서만 보인다)
+export function Header({ isGenerated, served, refreshSeconds = 0, demo = null, onDbmsStop = () => {}, onDbmsStart = () => {} }) {
   return h(
     "header",
     { class: "app-header" },
@@ -49,6 +50,16 @@ export function Header({ isGenerated, served, refreshSeconds = 0 }) {
       : null,
     served && SERVED_LABEL[served.from]
       ? h("span", { class: `badge badge-${served.from}`, title: "문의 데이터를 어디서 읽었는지와 응답 시간입니다. 처음에는 DBMS, 다시 열면 Redis 캐시(60초)에서 읽습니다." }, `${SERVED_LABEL[served.from]} · ${served.ms}ms`)
+      : null,
+    demo?.enabled
+      ? h(
+          "span",
+          { class: "demo-controls", role: "group", "aria-label": "시연용 DBMS 제어", title: "시연용: DBMS 프로세스를 강제로 종료하거나 다시 시작합니다. 데이터 파일은 지우지 않습니다." },
+          h("span", { class: `badge badge-db ${demo.running ? "is-up" : "is-down"}`, role: "status" }, demo.running ? "DBMS 켜짐" : "DBMS 꺼짐"),
+          h("button", { type: "button", class: "btn btn-sm", disabled: demo.busy || !demo.running, onClick: onDbmsStop }, "DBMS 종료"),
+          h("button", { type: "button", class: "btn btn-sm", disabled: demo.busy || demo.running, onClick: onDbmsStart }, "DBMS 시작"),
+          demo.message ? h("span", { class: "demo-message", role: "alert" }, demo.message) : null,
+        )
       : null,
     refreshSeconds > 0 ? h("span", { class: "note", title: "새로 접수된 문의가 있으면 이 간격마다 건수와 신호가 바뀝니다" }, `${refreshSeconds}초마다 자동 갱신`) : null,
     h("span", { class: "note" }, "시간은 한국 시간(KST) 기준"),

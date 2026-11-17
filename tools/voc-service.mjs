@@ -16,6 +16,8 @@
 //   GET  /api/v1/alerts/{id}/status-history   진행 상태 이력
 //   POST /api/v1/alerts/{id}/status           상태 추가 { status } -> 201 { alertId, status, at }
 //   POST /api/v1/admin/invalidate             문의를 다시 적재한 뒤 캐시를 비운다 (헤더 X-Admin-Token 필요)
+//   GET  /api/v1/demo/dbms                    시연 제어가 켜져 있는지와 DBMS 실행 여부 { enabled, running }
+//   POST /api/v1/demo/dbms/stop | /start      시연용: DBMS를 강제 종료(kill -9) / 같은 데이터 폴더로 다시 시작. --demo-controls 로 켰을 때만 있다
 //   공통 조회 조건: period, category, device, appVersion, query. 조회 응답의 dataSource는 "redis" 또는 "dbms"
 //
 // 저장 결과 (POST status)
@@ -25,12 +27,18 @@
 //   503  DBMS에 닿지 못했다
 //   "unknown"은 다시 보내면 중복 저장될 수 있으므로 자동으로 다시 시도하지 않는다.
 //
+// 시연 제어 (--demo-controls 또는 VOC_DEMO_CONTROLS=1): 화면의 "DBMS 종료 / 시작" 버튼이 쓴다. 기본은 꺼져 있고, 꺼져 있으면 위 주소가 없다(404).
+//   종료는 이 컴퓨터의 DBMS 포트를 쓰는 mini-db-server 프로세스에만 보낸다. 요청은 같은 사이트(Host·Origin)에서 X-Demo-Control 헤더와 함께 온 것만 받는다.
+//   시작은 --db-bin, --db-data-dir(기본: dbms/reliable/build/mini-db-server, db/data)으로 새 프로세스를 띄운다. 이 서비스가 끝나면 그 프로세스도 같이 끝낸다.
+//
 // 실행: ./tools/start-all.sh (또는 MINIDB_TOKEN=... node tools/voc-service.mjs). 127.0.0.1에서만 받는다.
+import { execFile, spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import zlib from "node:zlib";
 import { fileURLToPath } from "node:url";
 import { CONFIG } from "../src/voc/config.js";
@@ -179,6 +187,132 @@ class Db {
 }
 
 const sqlQuote = (value) => `'${value.replaceAll("'", "''")}'`;
+
+// ---------------------------------------------------------------- 시연용 DBMS 종료·시작 (--demo-controls)
+const execFileAsync = promisify(execFile);
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+class DbControl {
+  constructor({ dbUrl, token, bin, dataDir }) {
+    this.url = dbUrl.replace(/\/$/, "");
+    this.port = new URL(dbUrl).port || "80";
+    this.token = token;
+    this.bin = bin;
+    this.dataDir = dataDir;
+    this.busy = false;
+    this.child = null; // 이 서비스가 다시 띄운 DBMS 프로세스
+    process.on("exit", () => {
+      try {
+        this.child?.kill("SIGTERM"); // 서비스가 끝나면 다시 띄운 DBMS도 같이 끝낸다 (포트가 남아 다음 실행을 막지 않게)
+      } catch {
+        /* 이미 끝났다 */
+      }
+    });
+  }
+
+  async running() {
+    try {
+      const res = await fetch(`${this.url}/health`, { signal: AbortSignal.timeout(1500) });
+      await res.arrayBuffer().catch(() => {});
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** DBMS 포트를 열고 있는 프로세스의 pid. 없으면 null */
+  async listenerPid() {
+    try {
+      const { stdout } = await execFileAsync("lsof", ["-nP", `-iTCP:${this.port}`, "-sTCP:LISTEN", "-t"]);
+      const pid = Number(stdout.split("\n")[0]);
+      return pid > 0 ? pid : null;
+    } catch {
+      return null; // lsof는 찾는 게 없으면 오류 코드로 끝난다
+    }
+  }
+
+  /** 그 pid가 정말 mini-db-server인지: 포트를 다른 프로그램이 쓰고 있을 때 잘못 죽이지 않으려고 */
+  async isDbms(pid) {
+    try {
+      const { stdout } = await execFileAsync("ps", ["-p", String(pid), "-o", "command="]);
+      return stdout.includes(path.basename(this.bin));
+    } catch {
+      return false;
+    }
+  }
+
+  async exclusive(work) {
+    if (this.busy) throw new HttpError(409, "이미 종료 또는 시작을 처리하고 있습니다. 잠시 뒤에 다시 눌러 주세요.");
+    this.busy = true;
+    try {
+      return await work();
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  /** 강제 종료(SIGKILL): 프로세스가 갑자기 죽은 상황을 만든다. 데이터 파일은 지우지 않는다 */
+  stop() {
+    return this.exclusive(async () => {
+      if (!(await this.running())) return { running: false };
+      const pid = await this.listenerPid();
+      if (!pid) throw new HttpError(500, "DBMS 프로세스를 찾지 못했습니다.");
+      if (!(await this.isDbms(pid))) throw new HttpError(409, `포트 ${this.port}를 쓰는 프로그램이 DBMS(${path.basename(this.bin)})가 아니라서 종료하지 않았습니다.`);
+      process.kill(pid, "SIGKILL");
+      for (let i = 0; i < 40; i++) {
+        if (!(await this.running())) return { running: false };
+        await sleep(100);
+      }
+      throw new HttpError(500, "DBMS가 종료되지 않았습니다.");
+    });
+  }
+
+  /** 같은 데이터 폴더·포트·토큰으로 다시 띄운다. 시작할 때 DBMS가 커밋 로그를 읽어 복구한다 */
+  start() {
+    return this.exclusive(async () => {
+      if (await this.running()) return { running: true };
+      let log = "ignore";
+      let logFile = "";
+      try {
+        const dir = path.join(os.tmpdir(), "mini-react-logs");
+        fs.mkdirSync(dir, { recursive: true });
+        logFile = path.join(dir, "dbms-restart.log");
+        log = fs.openSync(logFile, "a");
+      } catch {
+        /* 로그 없이 시작한다 */
+      }
+      const child = spawn(this.bin, ["--data-dir", this.dataDir, "--port", this.port], {
+        env: { ...process.env, MINIDB_TOKEN: this.token },
+        stdio: ["ignore", log, log],
+      });
+      if (typeof log === "number") fs.closeSync(log);
+      let exited = false;
+      child.on("exit", () => {
+        exited = true;
+        if (this.child === child) this.child = null;
+      });
+      child.on("error", () => {
+        exited = true;
+      });
+      this.child = child;
+      for (let i = 0; i < 60; i++) {
+        if (await this.running()) return { running: true };
+        if (exited) break;
+        await sleep(100);
+      }
+      throw new HttpError(500, `DBMS가 시작되지 않았습니다.${logFile ? ` 로그: ${logFile}` : ""}`);
+    });
+  }
+}
+
+/** 시연 제어 요청은 같은 사이트에서 직접 보낸 것만 받는다 (다른 웹사이트가 몰래 보내 서버를 죽이지 못하게) */
+function requireDemoRequest(req, port) {
+  const host = String(req.headers.host ?? "");
+  if (![`localhost:${port}`, `127.0.0.1:${port}`, `[::1]:${port}`].includes(host)) throw new HttpError(403, "허용되지 않은 주소입니다.");
+  if (req.headers["x-demo-control"] !== "1") throw new HttpError(403, "시연 제어 요청이 아닙니다.");
+  const origin = req.headers.origin;
+  if (origin !== undefined && origin !== `http://${host}`) throw new HttpError(403, "같은 사이트에서 보낸 요청만 받습니다.");
+}
 
 // ---------------------------------------------------------------- Redis(HTTP) 캐시
 class Cache {
@@ -412,7 +546,7 @@ function serveStatic(req, res, pathname) {
   res.end(req.method === "HEAD" ? undefined : body);
 }
 
-function createServer(service) {
+function createServer(service, { control = null, port = 8001 } = {}) {
   const ADMIN_TOKEN = Buffer.from(process.env.MINIDB_TOKEN);
 
   async function route(req, res) {
@@ -450,10 +584,19 @@ function createServer(service) {
         const body = await service.history(parts[1]);
         return sendJson(res, 200, body, source(body));
       }
+      if (parts[0] === "demo" && parts[1] === "dbms" && parts.length === 2) {
+        if (!control) return sendJson(res, 200, { enabled: false });
+        return sendJson(res, 200, { enabled: true, running: await control.running() });
+      }
       throw new HttpError(404, "없는 주소입니다.");
     }
 
     if (req.method === "POST") {
+      if (control && parts[0] === "demo" && parts[1] === "dbms" && parts.length === 3 && (parts[2] === "stop" || parts[2] === "start")) {
+        requireDemoRequest(req, port);
+        const state = parts[2] === "stop" ? await control.stop() : await control.start();
+        return sendJson(res, 200, { enabled: true, ...state });
+      }
       if (parts[0] === "alerts" && parts.length === 3 && parts[2] === "status") {
         const alertId = parts[1];
         if (!validAlertId(alertId)) throw new HttpError(400, "alertId가 올바르지 않습니다.");
@@ -501,7 +644,16 @@ async function main() {
   acquireInstanceLock();
 
   const service = createService({ db: new Db(dbUrl, token), cache: new Cache(redisUrl) });
-  const server = createServer(service);
+  const demoControls = process.argv.includes("--demo-controls") || process.env.VOC_DEMO_CONTROLS === "1";
+  const control = demoControls
+    ? new DbControl({
+        dbUrl,
+        token,
+        bin: option("db-bin", path.join(ROOT, "dbms/reliable/build/mini-db-server")),
+        dataDir: option("db-data-dir", path.join(ROOT, "db/data")),
+      })
+    : null;
+  const server = createServer(service, { control, port });
   server.on("error", (e) => {
     console.error(`오류: 포트 ${port}를 열지 못했습니다 (${e.code ?? e.message})`);
     process.exit(1);
@@ -518,7 +670,7 @@ async function main() {
   const dbState = (await reachable(`${dbUrl.replace(/\/$/, "")}/health`)) ? "연결됨" : "연결 안 됨 (DBMS 서버를 먼저 켜세요)";
   const redisState = (await reachable(`${redisUrl.replace(/\/$/, "")}/keys/ping`)) ? "연결됨" : "연결 안 됨 (캐시 없이 DBMS로만 동작)";
   server.listen(port, "127.0.0.1", () => {
-    console.log(`VOC 서비스: http://localhost:${port}/voc.html  |  DBMS ${dbUrl}: ${dbState}  |  Redis ${redisUrl}: ${redisState}`);
+    console.log(`VOC 서비스: http://localhost:${port}/voc.html  |  DBMS ${dbUrl}: ${dbState}  |  Redis ${redisUrl}: ${redisState}${control ? "  |  시연 제어 켜짐 (화면에 DBMS 종료·시작 버튼)" : ""}`);
   });
 }
 

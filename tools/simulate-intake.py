@@ -63,7 +63,8 @@ class Db:
     def __init__(self, url, token):
         self.url, self.token = url.rstrip("/"), token
 
-    def query(self, sql):
+    def query(self, sql, tolerant=False):
+        """SQL 한 문장을 보낸다. tolerant이면 DBMS에 닿지 못해도 끝내지 않고 (0, {})를 돌려준다 (시연 중 DBMS를 껐다 켜도 접수가 이어지게)"""
         request = urllib.request.Request(
             self.url + "/query",
             data=json.dumps({"sql": sql}).encode("utf-8"),
@@ -76,6 +77,8 @@ class Db:
         except urllib.error.HTTPError as e:
             status, raw = e.code, e.read()
         except OSError as e:
+            if tolerant:
+                return 0, {}
             fail(f"DBMS 서버({self.url})에 연결하지 못했습니다: {e}. ./tools/start-all.sh 로 서버를 먼저 켜세요")
         try:
             return status, json.loads(raw)
@@ -87,19 +90,29 @@ def now_utc():
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
+_down_notified = False  # DBMS에 닿지 못하는 동안 같은 안내를 반복하지 않으려고
+
+
 def insert(db, category, device, version, text):
     """문의 1건을 저장한다. 저장이 DURABLE로 확인되면 새 문의 id, 아니면 None"""
+    global _down_notified
     sql = (
         "INSERT INTO inquiries (created_at,category,device,app_version,text) VALUES "
         f"({quote(now_utc())},{quote(category)},{quote(device)},{quote(version)},{quote(text)});"
     )
     for attempt in range(RETRIES + 1):
-        status, data = db.query(sql)
+        status, data = db.query(sql, tolerant=True)
+        if status == 0:  # 연결 거절: 전달되지 않았다. 이번 접수는 건너뛰고 DBMS가 돌아오면 이어간다
+            if not _down_notified:
+                print("  ! DBMS에 닿지 못해 접수를 건너뜁니다. DBMS가 다시 켜지면 이어서 접수합니다", file=sys.stderr)
+                _down_notified = True
+            return None
         if status == 409 and attempt < RETRIES:
             time.sleep(0.05 * (attempt + 1))  # 다른 쓰기와 충돌: 확정 전에 거절된 것이라 다시 보내도 중복되지 않는다
             continue
         break
     if status == 200 and data.get("ok") and data.get("commit") == "DURABLE":
+        _down_notified = False
         return data.get("inserted_id")
     unknown = data.get("commit") == "UNKNOWN" or data.get("recovery_required")
     reason = (data.get("error") or {}).get("message", f"HTTP {status}")

@@ -67,14 +67,33 @@ export function App({ dataUrl = "data/inquiries.sample.json", load = loadDataset
   const [detail, setDetail] = useState({ id: null, alert: null, evidence: { items: [], page: 1, totalPages: 1, total: 0 } });
   const [remoteHistory, setRemoteHistory] = useState({ id: null, rows: [] });
   const [reloadTick, setReloadTick] = useState(0); // 상태를 저장한 뒤 목록·이력을 다시 받으려고 올린다
+  // ---- 시연용 DBMS 제어 (서비스를 --demo-controls 로 켰을 때만 enabled): 화면 위쪽의 "DBMS 종료 / 시작" 버튼
+  // DBMS를 강제로 종료한 동안에는 자동 갱신을 멈춘다 (멈추지 않으면 갱신이 실패해 화면이 오류로 바뀌고 저장 실패 안내가 사라진다)
+  const [demo, setDemo] = useState({ enabled: false, running: true, busy: false, message: "" });
+  useEffect(() => {
+    if (!api?.demo) return undefined;
+    let cancelled = false;
+    api.demo.state().then((s) => {
+      if (!cancelled) setDemo((d) => ({ ...d, enabled: s.enabled === true, running: s.running !== false }));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [api]);
   // 자동 갱신: 일정 간격마다 같은 요청을 다시 보낸다 (탭이 가려져 있으면 건너뛴다). 서버는 바뀐 게 없으면 Redis 캐시로 빠르게 답한다
   useEffect(() => {
     if (!api || !refreshMs) return undefined;
     const timer = setInterval(() => {
-      if (!document.hidden) setReloadTick((n) => n + 1);
+      if (document.hidden) return;
+      if (demo.enabled) {
+        // DBMS가 꺼졌는지 켜졌는지는 매번 확인해서 버튼에 반영한다 (밖에서 켜고 꺼도 따라간다)
+        api.demo.state().then((s) => setDemo((d) => (d.running === (s.running !== false) ? d : { ...d, running: s.running !== false })));
+        if (!demo.running) return; // 꺼져 있는 동안은 화면을 다시 받지 않는다
+      }
+      setReloadTick((n) => n + 1);
     }, refreshMs);
     return () => clearInterval(timer);
-  }, [api, refreshMs]);
+  }, [api, refreshMs, demo.enabled, demo.running]);
   // 신호 목록: 조건(필터·진행 현황)이 바뀌거나 상태를 저장하거나 자동 갱신 시각이 되면 다시 받는다. 오래된 요청의 응답은 버린다
   useEffect(() => {
     if (!api) return undefined;
@@ -224,10 +243,33 @@ export function App({ dataUrl = "data/inquiries.sample.json", load = loadDataset
     );
   };
 
+  // 시연용 DBMS 종료·시작: 서비스가 프로세스를 대신 다룬다. 종료는 강제 종료(SIGKILL)라 데이터 파일은 그대로 남는다
+  const onDbmsStop = () => {
+    if (demo.busy) return;
+    setDemo((d) => ({ ...d, busy: true, message: "" }));
+    api.demo.stop().then(
+      (s) => setDemo((d) => ({ ...d, busy: false, running: s.running !== false, message: "" })),
+      (error) => setDemo((d) => ({ ...d, busy: false, message: error.message })),
+    );
+  };
+  const onDbmsStart = () => {
+    if (demo.busy) return;
+    setDemo((d) => ({ ...d, busy: true, message: "" }));
+    api.demo.start().then(
+      (s) =>
+        batch(() => {
+          setDemo((d) => ({ ...d, busy: false, running: s.running !== false, message: "" }));
+          setSaveState({ saving: false, message: "", alertId: null }); // 꺼져 있는 동안 남은 저장 실패 안내는 지운다
+          setReloadTick((n) => n + 1); // 켜졌으니 화면을 바로 다시 받는다
+        }),
+      (error) => setDemo((d) => ({ ...d, busy: false, message: error.message })),
+    );
+  };
+
   return h(
     "div",
     { class: "app" },
-    h(Header, { isGenerated: view.meta.generated === true, served: view.meta.served, refreshSeconds: api && refreshMs ? Number((refreshMs / 1000).toFixed(2)) : 0 }),
+    h(Header, { isGenerated: view.meta.generated === true, served: view.meta.served, refreshSeconds: api && refreshMs ? Number((refreshMs / 1000).toFixed(2)) : 0, demo, onDbmsStop, onDbmsStart }),
     h(FilterBar, {
       query, period, category, device, appVersion, appVersions: view.appVersions, statusFilter,
       onQuery: changeFilter(setQuery), onPeriod: changeFilter(setPeriod), onCategory: changeFilter(setCategory),
