@@ -63,7 +63,8 @@ export function App({ dataUrl = "data/inquiries.sample.json", load = loadDataset
 
   // ---- 통합 모드 (Step 4): 서비스 API가 계산한 결과를 받아 온다. 조건이 바뀔 때마다 다시 요청한다 (서버가 Redis 캐시로 답할 수 있다)
   const filters = { query, period, category, device, appVersion };
-  const [remote, setRemote] = useState({ status: "loading", message: "", overview: null, cards: [], counts: null, served: null });
+  // stale: DBMS를 일부러 꺼 둔 동안 새 조회가 실패했을 때의 안내. 이때는 마지막으로 받은 화면을 그대로 두고(비우지 않고) 이 안내만 보인다
+  const [remote, setRemote] = useState({ status: "loading", message: "", stale: "", overview: null, cards: [], counts: null, served: null });
   const [detail, setDetail] = useState({ id: null, alert: null, evidence: { items: [], page: 1, totalPages: 1, total: 0 } });
   const [remoteHistory, setRemoteHistory] = useState({ id: null, rows: [] });
   const [reloadTick, setReloadTick] = useState(0); // 상태를 저장한 뒤 목록·이력을 다시 받으려고 올린다
@@ -94,6 +95,15 @@ export function App({ dataUrl = "data/inquiries.sample.json", load = loadDataset
     }, refreshMs);
     return () => clearInterval(timer);
   }, [api, refreshMs, demo.enabled, demo.running]);
+  // 조회가 실패했을 때: 보통은 모든 영역을 오류로 바꾼다. 다만 시연에서 DBMS를 일부러 꺼 둔 동안(그리고 이미 화면을 받은 뒤)에는
+  // 카드를 누르거나 필터를 바꿔도 화면이 비지 않게, 마지막 화면을 두고 안내만 띄운다 (진행 현황 패널과 위쪽 버튼이 사라지지 않게)
+  // 응답 안에서 "지금 꺼 둔 상태인가"를 읽어야 해서(효과의 클로저는 오래된 값을 쥔다) 렌더링마다 최신 값으로 맞춘 상자를 쓴다
+  const stopped = useMemo(() => ({ value: false }), []);
+  stopped.value = demo.enabled && !demo.running;
+  const failRemote = (error) => (r) =>
+    stopped.value && r.status === "ready"
+      ? { ...r, stale: `DBMS가 꺼져 있어 최신 결과를 받지 못했습니다 · ${error.message}` }
+      : { ...r, status: "error", message: error.message };
   // 신호 목록: 조건(필터·진행 현황)이 바뀌거나 상태를 저장하거나 자동 갱신 시각이 되면 다시 받는다. 오래된 요청의 응답은 버린다
   useEffect(() => {
     if (!api) return undefined;
@@ -102,11 +112,11 @@ export function App({ dataUrl = "data/inquiries.sample.json", load = loadDataset
       .then(([overview, list]) => {
         if (cancelled) return;
         batch(() => {
-          setRemote({ status: "ready", message: "", overview: overview.body, cards: list.body.alerts, counts: list.body.counts ?? null, served: { from: list.body.dataSource, ms: list.ms } });
+          setRemote({ status: "ready", message: "", stale: "", overview: overview.body, cards: list.body.alerts, counts: list.body.counts ?? null, served: { from: list.body.dataSource, ms: list.ms } });
         });
       })
       .catch((error) => {
-        if (!cancelled) setRemote((r) => ({ ...r, status: "error", message: error.message }));
+        if (!cancelled) setRemote(failRemote(error));
       });
     return () => {
       cancelled = true;
@@ -123,7 +133,7 @@ export function App({ dataUrl = "data/inquiries.sample.json", load = loadDataset
         if (!cancelled) setDetail({ id: remoteSelectedId, alert: body.alert, evidence: body.evidence });
       })
       .catch((error) => {
-        if (!cancelled) setRemote((r) => ({ ...r, status: "error", message: error.message }));
+        if (!cancelled) setRemote(failRemote(error));
       });
     return () => {
       cancelled = true;
@@ -138,7 +148,7 @@ export function App({ dataUrl = "data/inquiries.sample.json", load = loadDataset
         if (!cancelled) setRemoteHistory({ id: remoteSelectedId, rows: body.history });
       })
       .catch((error) => {
-        if (!cancelled) setRemote((r) => ({ ...r, status: "error", message: error.message }));
+        if (!cancelled) setRemote(failRemote(error));
       });
     return () => {
       cancelled = true;
@@ -193,7 +203,9 @@ export function App({ dataUrl = "data/inquiries.sample.json", load = loadDataset
     : { summary, appVersions, alerts: visibleAlerts, alertCounts, selected, selectedId: selected ? selected.id : null, evidence, statusOf, history: selected ? (statusLog[selected.id] ?? []) : [], loadState, meta };
   const statusProps = { status: view.loadState.status, message: view.loadState.status === "error" ? view.loadState.message : "" };
   // 상세만 아직 오는 중이면(신호를 바꾼 직후) 상세 영역에만 로딩을 보인다
-  const detailStatusProps = api && view.loadState.status === "ready" && !detailReady && view.selectedId !== null ? { status: "loading", message: "" } : statusProps;
+  const stale = api ? remote.stale : "";
+  const detailStatusProps =
+    api && view.loadState.status === "ready" && !detailReady && view.selectedId !== null ? (stale ? { status: "error", message: stale } : { status: "loading", message: "" }) : statusProps;
 
   // ---- 이벤트 핸들러: 핸들러 안의 여러 setState는 자동으로 한 번의 렌더링으로 합쳐진다 (Batching)
   const changeFilter = (setter) => (value) => {
@@ -275,6 +287,7 @@ export function App({ dataUrl = "data/inquiries.sample.json", load = loadDataset
       onQuery: changeFilter(setQuery), onPeriod: changeFilter(setPeriod), onCategory: changeFilter(setCategory),
       onDevice: changeFilter(setDevice), onVersion: changeFilter(setAppVersion), onStatusFilter: changeFilter(setStatusFilter), onReset,
     }),
+    stale ? h("p", { class: "stale-notice", role: "status" }, stale) : null,
     h(SummaryCard, { summary: view.summary, alertCounts: view.alertCounts, ...statusProps }),
     // 진행 현황(상태 바꾸기)은 문의 요약과 신호 목록 사이에 둔다: 시연할 때 맨 아래까지 내려갔다 올라오지 않게
     view.loadState.status === "ready" && view.selectedId !== null

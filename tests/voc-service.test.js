@@ -157,11 +157,15 @@ function fakeService(data, { statuses = {}, save, demo } = {}) {
   // gate.closed가 되면 조회가 끝나지 않는 것처럼 둔다: 시험이 끝난 뒤에도 자동 갱신 타이머는 남으므로(화면을 닫는 방법이 없다) 무거운 계산을 멈추려고
   const gate = { closed: false };
   const guard = (fn) => (...args) => (gate.closed ? new Promise(() => {}) : fn(...args));
+  // 시연에서 DBMS를 꺼 둔 동안은 조회가 실패한다 (아래 dbms는 demo를 넘겼을 때만 있다)
+  const down = () => {
+    if (dbms && !dbms.running) throw new ApiError("DBMS 서버에 연결할 수 없습니다.", 503);
+  };
   const api = {
-    overview: guard(async (f) => (calls.overview.push(f), { body: { meta: { generated: true }, ...overviewOf(analyze(data.inquiries, normalizeFilters(f))), dataSource: "dbms" }, ms: 12 })),
-    alerts: guard(async (f, opts) => (calls.alerts.push({ f, opts }), { body: { ...listPage(cardsOf(analyze(data.inquiries, normalizeFilters(f))), map, opts), dataSource: calls.alerts.length > 1 ? "redis" : "dbms" }, ms: 5 })),
-    detail: guard(async (id, f, page) => (calls.detail.push({ id, f, page }), { body: detailOf(analyze(data.inquiries, normalizeFilters(f)), id, page), ms: 3 })),
-    history: guard(async (id) => (calls.history.push(id), { body: { history: map[id] ?? [] }, ms: 2 })),
+    overview: guard(async (f) => (calls.overview.push(f), down(), { body: { meta: { generated: true }, ...overviewOf(analyze(data.inquiries, normalizeFilters(f))), dataSource: "dbms" }, ms: 12 })),
+    alerts: guard(async (f, opts) => (calls.alerts.push({ f, opts }), down(), { body: { ...listPage(cardsOf(analyze(data.inquiries, normalizeFilters(f))), map, opts), dataSource: calls.alerts.length > 1 ? "redis" : "dbms" }, ms: 5 })),
+    detail: guard(async (id, f, page) => (calls.detail.push({ id, f, page }), down(), { body: detailOf(analyze(data.inquiries, normalizeFilters(f)), id, page), ms: 3 })),
+    history: guard(async (id) => (calls.history.push(id), down(), { body: { history: map[id] ?? [] }, ms: 2 })),
     saveStatus: async (id, status) => {
       calls.save.push([id, status]);
       if (save) return save(id, status, map);
@@ -423,6 +427,35 @@ describe("시연용 DBMS 제어 버튼 (서비스를 --demo-controls 로 켰을 
       assert(calls.overview.length > before, "시작하면 화면을 바로 다시 받는다");
       assert($(".progress .notice") === null, "저장 실패 안내가 지워진다");
     }, { demo: { running: true }, save: async () => { throw new SaveError("DBMS 서버에 연결할 수 없습니다.", "not_saved"); } });
+  });
+  it("꺼져 있는 동안 다른 신호를 눌러도 화면이 비지 않는다 (마지막 화면과 진행 현황을 두고 안내만 띄운다)", async () => {
+    await withRemote(async ({ box, $, $$ }) => {
+      press(box, "DBMS 종료");
+      await settle();
+      const cards = $$(".alert-card");
+      cards[2].dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await settle();
+      eq($$(".alert-card").length, cards.length, "신호 카드는 그대로");
+      assert($(".progress") !== null, "진행 현황 패널은 그대로");
+      assert($(".demo-controls") !== null, "위쪽 버튼도 그대로");
+      assert(text($(".stale-notice")).includes("DBMS가 꺼져 있어 최신 결과를 받지 못했습니다"), "안내");
+      assert($(".signal-detail .status-error") !== null, "상세 영역에만 이유가 보인다");
+      assert($(".signal-list .status-error") === null, "목록은 오류로 바뀌지 않는다");
+      press(box, "DBMS 시작");
+      await settle();
+      assert($(".stale-notice") === null, "다시 켜지면 안내가 사라진다");
+      assert($(".signal-detail .status-error") === null, "상세도 다시 받아 온다");
+    }, { demo: { running: true } });
+  });
+  it("화면이 모르는 사이에 DBMS가 꺼져서 조회가 실패하면 그대로 모든 영역이 오류가 된다 (안내만 남기는 것은 꺼 둔 것을 아는 동안뿐)", async () => {
+    await withRemote(async ({ $, $$, dbms }) => {
+      assert($(".status-error") === null);
+      dbms.running = false; // 버튼을 쓰지 않고 밖에서 꺼졌고, 자동 갱신이 없어 화면은 아직 모른다
+      $$(".alert-card")[2].dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await settle();
+      assert($(".signal-list .status-error") !== null, "목록도 오류가 된다");
+      assert($(".stale-notice") === null, "안내만 남기는 경우가 아니다");
+    }, { demo: { running: true } });
   });
   it("종료가 실패하면 이유를 보여 주고 상태는 바꾸지 않는다", async () => {
     await withRemote(async ({ box, $ }) => {

@@ -92,6 +92,8 @@ ul { padding: 0; list-style: none; }
 .badge-db.is-down::before { background: var(--accent); }
 .btn-sm { height: 28px; padding: 0 12px; font-size: 13px; }
 .demo-message { font-size: 12px; line-height: 16px; color: var(--negative); }
+/* DBMS를 꺼 둔 동안 새 조회가 실패했을 때: 마지막 화면은 두고 이 안내만 */
+.stale-notice { padding: 8px 12px; font-size: 13px; line-height: 20px; color: var(--negative); border: 1px solid color-mix(in srgb, var(--negative) 50%, transparent); border-radius: 8px; }
 
 /* 표면: 카드 색 + 가는 선 */
 .filter-bar, .summary, .panel { background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
