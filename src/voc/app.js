@@ -234,8 +234,7 @@ export function App({ dataUrl = "data/inquiries.sample.json", load = loadDataset
       onDevice: changeFilter(setDevice), onVersion: changeFilter(setAppVersion), onStatusFilter: changeFilter(setStatusFilter), onReset,
     }),
     h(SummaryCard, { summary: view.summary, alertCounts: view.alertCounts, ...statusProps }),
-    h(SignalList, { alerts: view.alerts, selectedId: view.selectedId, onSelect, statusOf: view.statusOf, ...statusProps }),
-    h(SignalDetail, { alert: view.selected, evidence: view.evidence, onPageChange: setPage, ...detailStatusProps }),
+    // 진행 현황(상태 바꾸기)은 문의 요약과 신호 목록 사이에 둔다: 시연할 때 맨 아래까지 내려갔다 올라오지 않게
     view.loadState.status === "ready" && view.selectedId !== null
       ? h(ProgressPanel, {
           alertId: view.selectedId,
@@ -247,6 +246,8 @@ export function App({ dataUrl = "data/inquiries.sample.json", load = loadDataset
           notice: saveState.alertId === view.selectedId ? saveState.message : "",
         })
       : null,
+    h(SignalList, { alerts: view.alerts, selectedId: view.selectedId, onSelect, statusOf: view.statusOf, ...statusProps }),
+    h(SignalDetail, { alert: view.selected, evidence: view.evidence, onPageChange: setPage, ...detailStatusProps }),
     view.loadState.status === "ready" && view.loadState.message ? h("p", { class: "notice" }, view.loadState.message) : null,
   );
 }

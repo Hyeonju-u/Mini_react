@@ -1,5 +1,7 @@
 // 고객 문의(VOC) 이상 신호 탐지 (순수 함수). 화면(DOM)이나 Hook에 의존하지 않아 단위 테스트가 쉽다.
-// 시간은 모두 UTC 기준의 "시(hour)" 문자열("2026-11-09T10")로 다룬다 (브라우저 시간대에 따라 결과가 달라지지 않게).
+// 시간은 안에서는 UTC 기준의 "시(hour)" 문자열("2026-11-09T10")로 다룬다 (브라우저 시간대에 따라 결과가 달라지지 않게).
+// 화면에 보여 줄 때만 한국 시간(KST)으로 바꾼다 (formatHour, formatRange, formatRangeShort, formatKst).
+// 한국 시간과 UTC는 정확히 9시간 차이라 1시간 단위 묶음의 경계가 같으므로, 신호 탐지 결과는 어느 쪽으로 해도 같다.
 //
 // 판정 방식 (승인된 설계): 데이터 전체를 1시간 단위로 훑어서 기준을 넘은 시각을 찾고,
 // 연속된 시각은 하나의 "발생 건(alert)"으로 합친다.
@@ -37,11 +39,29 @@ export function hourRange(inquiries) {
   return from === null ? null : { from, to };
 }
 
-export const formatHour = (hour) => `${hour.slice(0, 10)} ${hour.slice(11)}:00`;
+// 화면에 보이는 시각은 한국 시간(KST, UTC+9)이다. 저장값과 신호 id는 UTC 그대로 두고 표시할 때만 바꾼다
+// (신호 id에 시각이 들어 있어서, 바꾸면 이미 저장된 상태 이력과 끊긴다). 한국은 일광절약시간이 없어 항상 +9시간이다.
+const KST_OFFSET_MS = 9 * HOUR_MS;
 
-/** 발생 구간 표시. 같은 날이면 날짜를 한 번만 쓴다 */
+/** UTC "시" 문자열 → 한국 시간의 "시" 문자열. "2026-11-09T10" → "2026-11-09T19" */
+export const toKstHour = (hour) => msToHour(hourToMs(hour) + KST_OFFSET_MS);
+
+/** UTC ISO 시각 → 한국 시간 "YYYY-MM-DD HH:MM". 읽을 수 없으면 앞 16글자를 그대로 쓴다 */
+export function formatKst(iso) {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return String(iso).slice(0, 16).replace("T", " ");
+  return new Date(ms + KST_OFFSET_MS).toISOString().slice(0, 16).replace("T", " ");
+}
+
+export const formatHour = (hour) => {
+  const k = toKstHour(hour);
+  return `${k.slice(0, 10)} ${k.slice(11)}:00`;
+};
+
+/** 발생 구간 표시(한국 시간). 같은 날이면 날짜를 한 번만 쓴다 */
 export function formatRange(startHour, endHour) {
-  const [d1, h1, d2, h2] = [startHour.slice(0, 10), startHour.slice(11), endHour.slice(0, 10), endHour.slice(11)];
+  const [s, e] = [toKstHour(startHour), toKstHour(endHour)];
+  const [d1, h1, d2, h2] = [s.slice(0, 10), s.slice(11), e.slice(0, 10), e.slice(11)];
   if (d1 === d2) return `${d1} ${h1}:00~${h2}:59`;
   return `${d1} ${h1}:00 ~ ${d2} ${h2}:59`;
 }
@@ -51,7 +71,8 @@ export function formatRange(startHour, endHour) {
  * 예: "11-09 09~13시", 날짜가 다르면 "11-08 22시~11-09 02시"
  */
 export function formatRangeShort(startHour, endHour) {
-  const [d1, h1, d2, h2] = [startHour.slice(5, 10), startHour.slice(11), endHour.slice(5, 10), endHour.slice(11)];
+  const [s, e] = [toKstHour(startHour), toKstHour(endHour)];
+  const [d1, h1, d2, h2] = [s.slice(5, 10), s.slice(11), e.slice(5, 10), e.slice(11)];
   const end = String(Number(h2) + 1).padStart(2, "0");
   return d1 === d2 ? `${d1} ${h1}~${end}시` : `${d1} ${h1}시~${d2} ${end}시`;
 }
@@ -298,7 +319,8 @@ function hourlyBars(ctx, series, start, end) {
   const bars = [];
   for (let i = lo; i <= hi; i++) {
     const hour = ctx.hours[i];
-    bars.push({ label: formatHour(hour), short: `${hour.slice(5, 10)} ${hour.slice(11)}시`, value: series[i], highlight: i >= start && i <= end });
+    const kst = toKstHour(hour);
+    bars.push({ label: formatHour(hour), short: `${kst.slice(5, 10)} ${kst.slice(11)}시`, value: series[i], highlight: i >= start && i <= end });
   }
   return bars;
 }

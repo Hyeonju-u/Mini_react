@@ -136,7 +136,7 @@ describe("데이터 출처 표시", () => {
 describe("첫 화면 (R-01 ~ R-05)", () => {
   it("헤더·요약·심각도순 가로 카드·첫 신호 상세(이유·차트·근거 문의)가 보인다", async () => {
     await withApp(({ $, $$, data }) => {
-      assert(text($(".app-header")).includes("OBJECT NOTE 고객 문의 이상 탐지"));
+      assert(text($(".app-header")).includes("고객 문의 이상 탐지"));
       assert($(".badge"), "생성 데이터 표시");
       assert(text($(".summary")).includes("3,000건") && text($(".summary")).includes("최다 유형"));
       eq($$(".alert-card").length, expectedAlertCount(data));
@@ -518,7 +518,7 @@ describe("진행 상태 (F-08, R-14) — Step 1 임시 버전", () => {
       deepEq(histRows(ctx), ["조치 중", "분석 중"], "최신이 위");
       eq($$(".status-history li")[1].outerHTML, firstRowHtml, "이전 행은 그대로");
       eq($(".status-steps .current").textContent, "조치 중", "현재 상태 = 가장 마지막 행");
-      assert(text($(".status-history")).includes("11-10 12:34 UTC"), "바뀐 시각이 이력에 보인다");
+      assert(text($(".status-history")).includes("11-10 21:34 KST"), "바뀐 시각이 이력에 보인다");
     });
   });
 
@@ -661,7 +661,7 @@ describe("진행 상태 저장 (F-08, R-14) — DB에 저장하는 모드: 저�
       await tick(0);
       eq(firstCardStatus(ctx), "상태 · 분석 중");
       deepEq(histRows(ctx), ["분석 중"]);
-      assert(text(ctx.$(".status-history")).includes("11-13 05:06 UTC"), "이력의 시각은 서버가 알려 준 값");
+      assert(text(ctx.$(".status-history")).includes("11-13 14:06 KST"), "이력의 시각은 서버가 알려 준 값");
       assert(!text(ctx.$(".progress")).includes("저장 중"), "저장 중 표시가 사라진다");
       assert(!stepBtn(ctx, "해결").disabled, "버튼이 다시 열린다");
     }, s, data);

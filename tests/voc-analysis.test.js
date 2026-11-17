@@ -1,7 +1,7 @@
 // 고객 문의(VOC) 이상 탐지 로직 단위 테스트 (순수 함수): 시간·필터·요약·4신호 탐지·정규화·페이지·데이터 불러오기·샘플 정답지
 import { describe, it, assert, eq, deepEq, throws } from "./runner.js";
 import {
-  hourOf, eachHour, hourRange, formatHour, formatRange, formatRangeShort, filterInquiries, sinceHour, inPeriod, summarize,
+  hourOf, eachHour, hourRange, toKstHour, formatKst, formatHour, formatRange, formatRangeShort, filterInquiries, sinceHour, inPeriod, summarize,
   normalizePhrase, highlightSegments, detectAlerts,
 } from "../src/voc/analysis.js";
 import { paginate, pageWindow } from "../src/voc/pagination.js";
@@ -49,17 +49,27 @@ describe("시간 도우미", () => {
     deepEq(hourRange([q("배송", hr(3, 5)), q("배송", hr(0, 7)), q("배송", hr(2, 1))]), { from: hr(0, 7), to: hr(3, 5) });
     eq(hourRange([]), null);
   });
-  it("formatHour · formatRange: 같은 시각 / 같은 날 / 날짜가 다른 경우", () => {
-    eq(formatHour("2026-11-09T09"), "2026-11-09 09:00");
-    eq(formatRange("2026-11-09T09", "2026-11-09T09"), "2026-11-09 09:00~09:59");
-    eq(formatRange("2026-11-09T09", "2026-11-09T12"), "2026-11-09 09:00~12:59");
-    eq(formatRange("2026-11-08T22", "2026-11-09T01"), "2026-11-08 22:00 ~ 2026-11-09 01:59");
+  it("한국 시간 표시: 저장값은 UTC 그대로, 화면에는 +9시간 (날짜가 넘어가는 경우 포함)", () => {
+    eq(toKstHour("2026-11-09T10"), "2026-11-09T19");
+    eq(toKstHour("2026-11-09T15"), "2026-11-10T00", "UTC 15시 = 한국 다음 날 0시");
+    eq(toKstHour("2026-12-31T20"), "2027-01-01T05", "연도도 넘어간다");
+    eq(formatKst("2026-11-09T15:30:00.000Z"), "2026-11-10 00:30");
+    eq(formatKst("2026-11-09T14:59:59Z"), "2026-11-09 23:59");
+    eq(formatKst("not-a-date"), "not-a-date", "읽을 수 없으면 그대로 보여 준다");
   });
-  it("formatRangeShort: 카드용으로 연도와 분을 뺀다 (끝은 그 시 정각까지: 12시대면 13시)", () => {
-    eq(formatRangeShort("2026-11-09T09", "2026-11-09T12"), "11-09 09~13시");
-    eq(formatRangeShort("2026-11-09T09", "2026-11-09T09"), "11-09 09~10시");
-    eq(formatRangeShort("2026-11-09T22", "2026-11-09T23"), "11-09 22~24시");
-    eq(formatRangeShort("2026-11-08T22", "2026-11-09T01"), "11-08 22시~11-09 02시");
+
+  it("formatHour · formatRange (한국 시간으로 표시): 같은 시각 / 같은 날 / 날짜가 다른 경우", () => {
+    eq(formatHour("2026-11-09T00"), "2026-11-09 09:00");
+    eq(formatRange("2026-11-09T00", "2026-11-09T00"), "2026-11-09 09:00~09:59");
+    eq(formatRange("2026-11-09T00", "2026-11-09T03"), "2026-11-09 09:00~12:59");
+    eq(formatRange("2026-11-08T13", "2026-11-08T16"), "2026-11-08 22:00 ~ 2026-11-09 01:59");
+  });
+
+  it("formatRangeShort (한국 시간): 카드용으로 연도와 분을 뺀다 (끝은 그 시 정각까지: 12시대면 13시)", () => {
+    eq(formatRangeShort("2026-11-09T00", "2026-11-09T03"), "11-09 09~13시");
+    eq(formatRangeShort("2026-11-09T00", "2026-11-09T00"), "11-09 09~10시");
+    eq(formatRangeShort("2026-11-09T13", "2026-11-09T14"), "11-09 22~24시");
+    eq(formatRangeShort("2026-11-08T13", "2026-11-08T16"), "11-08 22시~11-09 02시");
   });
 });
 

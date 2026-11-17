@@ -6,7 +6,7 @@
 import { h } from "../mini-react.js";
 import { CONFIG } from "./config.js";
 import { STATUSES, DEFAULT_STATUS, canChangeTo } from "./status.js";
-import { SIGNAL_LABEL, SEVERITY_LABEL, formatRangeShort, highlightSegments } from "./analysis.js";
+import { SIGNAL_LABEL, SEVERITY_LABEL, formatRangeShort, formatKst, highlightSegments } from "./analysis.js";
 import { pageWindow } from "./pagination.js";
 
 const STATUS_TEXT = { loading: "불러오는 중", empty: "표시할 내용이 없습니다", error: "문제가 발생했습니다" };
@@ -43,15 +43,15 @@ export function Header({ isGenerated, served, refreshSeconds = 0 }) {
   return h(
     "header",
     { class: "app-header" },
-    h("h1", null, "OBJECT NOTE 고객 문의 이상 탐지"),
+    h("h1", null, "고객 문의 이상 탐지"),
     isGenerated
-      ? h("span", { class: "badge", title: "가상의 회사 OBJECT NOTE의 시연용 데이터입니다. 실제 고객 문의가 아닙니다." }, "생성 데이터")
+      ? h("span", { class: "badge", title: "시연용 생성 데이터입니다. 실제 고객 문의가 아닙니다." }, "생성 데이터")
       : null,
     served && SERVED_LABEL[served.from]
       ? h("span", { class: `badge badge-${served.from}`, title: "문의 데이터를 어디서 읽었는지와 응답 시간입니다. 처음에는 DBMS, 다시 열면 Redis 캐시(60초)에서 읽습니다." }, `${SERVED_LABEL[served.from]} · ${served.ms}ms`)
       : null,
     refreshSeconds > 0 ? h("span", { class: "note", title: "새로 접수된 문의가 있으면 이 간격마다 건수와 신호가 바뀝니다" }, `${refreshSeconds}초마다 자동 갱신`) : null,
-    h("span", { class: "note" }, "시간은 UTC 기준"),
+    h("span", { class: "note" }, "시간은 한국 시간(KST) 기준"),
   );
 }
 
@@ -231,7 +231,7 @@ function InquiryItem({ inquiry, phrases }) {
       h("span", { class: "inquiry-cat" }, inquiry.category),
       h("span", null, inquiry.device),
       h("span", null, inquiry.app_version),
-      h("span", null, inquiry.created_at.slice(0, 16).replace("T", " ")),
+      h("span", null, formatKst(inquiry.created_at)),
     ),
     h("p", { class: "inquiry-text" }, highlightSegments(inquiry.text, phrases).map((seg) => (seg.mark ? h("mark", null, seg.text) : seg.text))),
   );
@@ -271,7 +271,7 @@ export function ProgressPanel({ alertId, currentStatus: current, history, onStat
       { class: "status-history", "aria-label": "상태 변경 이력" },
       history.length === 0
         ? h("li", { class: "muted" }, "변경 이력이 없습니다")
-        : history.slice().reverse().map((row) => h("li", null, h("span", { class: "hist-status" }, row.status), h("span", { class: "hist-at" }, `${row.at.slice(5, 16).replace("T", " ")} UTC`))),
+        : history.slice().reverse().map((row) => h("li", null, h("span", { class: "hist-status" }, row.status), h("span", { class: "hist-at" }, `${formatKst(row.at).slice(5)} KST`))),
     ),
     saving ? h("p", { class: "muted", role: "status" }, "저장 중…") : null,
     notice ? h("p", { class: "notice", role: "alert" }, notice) : null,
