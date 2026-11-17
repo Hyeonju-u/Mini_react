@@ -33,12 +33,23 @@ export function parseDataset(json) {
 /** 서버에서 공용 샘플 JSON을 가져온다. 네트워크·HTTP·JSON 오류는 사람이 읽을 수 있는 메시지로 바꿔 던진다 async:비동기 함수로 선언(비동기:서버에서 데이터 가져오는 작업 시간걸리는 동안 프로그램이 무작정 기다리지않고 다른 작업을 진행 할 수 있게 하는 방식)url:데이터 가져올 주소 fetchFn 데이터 가져오는 기능 */
 export async function loadDataset(url, fetchFn = (...args) => fetch(...args)) {
   let response;//let 처음에는 값이 없고 새로운 값 할당할때
+  const startedAt = performance.now(); // 응답이 오기까지 걸린 시간 (화면의 출처 표시용)
   try {//try 실행해볼 코드
     response = await fetchFn(url);//await 비동기 작업이 끝날때 까지 해당 작업의 결과를 기다림
   } catch {//catch 실행중 오류가 발생했을때 처리하는 코드
     throw new Error("문의 데이터를 불러오지 못했습니다. 네트워크 연결이나 서버 실행 여부를 확인해 주세요."); //Error만하면 영어에러 내뱉는데 New 붙이면 저렇게 에러 문구 지정해서 반환가능
   }
-  if (!response.ok) throw new Error(`문의 데이터를 불러오지 못했습니다. (HTTP ${response.status})`);//.ok 통신이 성공적으로 처리됐는지 알려주는 속성 HTTP 응답이 성공 범위인지 나타내는 속성 200번대 응답 true 404 반환하면 false response.status http 상태코드 알려줌 만약 서버 응답이 정상이 아니라면 몇번에러 코드 때문에 실패했는지(response.status) 적힌 새로운 한글 에러를 만들어서 바깥으로 던져라
+  // 중계기(tools/dev-proxy.py)는 실패 원인을 { error: "..." } 로 알려 준다. 있으면 함께 보여준다
+  let detail = "";
+  if (!response.ok) {
+    try {
+      const body = await response.json();
+      if (typeof body?.error === "string") detail = ` ${body.error}`;
+    } catch {
+      // 본문이 없거나 JSON이 아니면 상태 코드만 보여준다
+    }
+  }
+  if (!response.ok) throw new Error(`문의 데이터를 불러오지 못했습니다. (HTTP ${response.status})${detail}`);//.ok 통신이 성공적으로 처리됐는지 알려주는 속성 HTTP 응답이 성공 범위인지 나타내는 속성 200번대 응답 true 404 반환하면 false response.status http 상태코드 알려줌 만약 서버 응답이 정상이 아니라면 몇번에러 코드 때문에 실패했는지(response.status) 적힌 새로운 한글 에러를 만들어서 바깥으로 던져라
   //json 변환 
   let json;//json 변수하나 선언 let은 try블록 안에서 변수에 값을 새로 채워넣어야함
   try {
@@ -46,7 +57,11 @@ export async function loadDataset(url, fetchFn = (...args) => fetch(...args)) {
   } catch {
     throw new Error("문의 데이터가 올바른 JSON이 아닙니다.");
   }
-  return parseDataset(json);
+  const result = parseDataset(json);
+  // 중계기는 어디서 읽었는지를 X-Data-Source 헤더(redis | dbms)로 알려 준다. 헤더가 없으면(샘플 JSON 등) 표시하지 않는다
+  const from = response.headers?.get?.("X-Data-Source");
+  if (from === "redis" || from === "dbms") result.meta = { ...result.meta, served: { from, ms: Math.round(performance.now() - startedAt) } };
+  return result;
 }
 
 /** 필터 선택지: 데이터에 실제로 있는 앱 버전 목록 만들기 (오름차순, "web"은 앱 버전이 아니므로 뺀다)... 전개연산자 map:배열의 각 요소를 원하는 형태로 변환하는 기능 set:중복된 값을 허용되지않는 자료구조 */
