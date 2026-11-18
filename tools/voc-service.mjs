@@ -385,23 +385,31 @@ function createService({ db, cache }) {
    * 캐시 어사이드. { value, source }를 돌려준다. source는 "redis" 또는 "dbms".
    * 계산하는 사이 세대가 바뀌었으면(= 읽는 도중 무효화) 결과는 이번 요청에만 돌려주고 Redis에는 저장하지 않는다.
    */
-  async function cached(key, ttl, genName, build) {
-    const hit = await cache.get(key);
-    if (hit !== undefined) {
-      try {
-        return { value: JSON.parse(hit), source: "redis" };
-      } catch {
-        /* 깨진 값은 miss로 본다 */
+  async function cached(key, ttl, genName, build, mode = "normal") {
+    // mode(시연 제어를 켰을 때만 쓴다, 두 경로의 시간을 눈으로 비교하려는 것):
+    //   "bypass" Redis를 읽지 않고 DBMS에서 계산한다 (결과는 Redis에 저장해 다음 "only"가 읽을 수 있게 한다)
+    //   "only"   Redis에 있는 것만 돌려준다. 없으면 DBMS로 가지 않고 404 (거짓 숫자를 만들지 않는다)
+    if (mode !== "bypass") {
+      const hit = await cache.get(key);
+      if (hit !== undefined) {
+        try {
+          return { value: JSON.parse(hit), source: "redis" };
+        } catch {
+          /* 깨진 값은 miss로 본다 */
+        }
       }
+      if (mode === "only") throw new HttpError(404, "Redis에 아직 없습니다. 먼저 DBMS에서 가져오세요.", { outcome: "cache_miss" });
     }
-    if (flights.has(key)) return flights.get(key);
+    if (mode !== "bypass" && flights.has(key)) return flights.get(key); // bypass는 진행 중인 계산에 합류하지 않는다 (재려는 시간이 짧아지지 않게)
     const startedAt = generation[genName];
     const flight = (async () => {
       const value = await build();
       if (generation[genName] === startedAt) await cache.put(key, JSON.stringify(value), ttl);
       return { value, source: "dbms" };
-    })().finally(() => flights.delete(key));
-    flights.set(key, flight);
+    })().finally(() => {
+      if (flights.get(key) === flight) flights.delete(key);
+    });
+    if (!flights.has(key)) flights.set(key, flight);
     return flight;
   }
 
@@ -423,17 +431,23 @@ function createService({ db, cache }) {
   const statusMap = () => cached(`cache:voc:v1:statuses:${generation.status}`, TTL_STATUSES, "status", loadStatusMap);
 
   return {
-    async overview(filters) {
-      const { value, source } = await cached(analysisKey("overview", filterKey(filters)), TTL_ANALYSIS, "inquiry", async () => ({
-        meta: META,
-        ...overviewOf(analyze(await loadInquiries(), filters)),
-      }));
+    async overview(filters, mode = "normal") {
+      const { value, source } = await cached(
+        analysisKey("overview", filterKey(filters)),
+        TTL_ANALYSIS,
+        "inquiry",
+        async () => ({
+          meta: META,
+          ...overviewOf(analyze(await loadInquiries(), filters)),
+        }),
+        mode,
+      );
       return { ...value, dataSource: source };
     },
 
-    async alerts(filters, { status, page, pageSize }) {
+    async alerts(filters, { status, page, pageSize, mode = "normal" }) {
       const [{ value: cards, source }, { value: statuses }] = await Promise.all([
-        cached(analysisKey("cards", filterKey(filters)), TTL_ANALYSIS, "inquiry", async () => cardsOf(analyze(await loadInquiries(), filters))),
+        cached(analysisKey("cards", filterKey(filters)), TTL_ANALYSIS, "inquiry", async () => cardsOf(analyze(await loadInquiries(), filters)), mode),
         statusMap(),
       ]);
       return { ...listPage(cards, statuses, { status, page, pageSize }), dataSource: source };
@@ -562,9 +576,17 @@ function createServer(service, { control = null, port = 8001 } = {}) {
     if (!pathname.startsWith("/api/v1/")) throw new HttpError(404, "없는 주소입니다.");
     const parts = pathname.slice("/api/v1/".length).split("/").map(decodeURIComponent);
 
+    // cache=bypass|only: 두 경로(DBMS 직접 / Redis만)의 시간을 비교해 보이려는 시연용 옵션. 시연 제어(--demo-controls)를 켠 서버에서만 받는다
+    const cacheMode = () => {
+      if (q.cache === undefined || q.cache === "") return "normal";
+      if (!control) throw new HttpError(400, "cache 옵션은 시연 제어(--demo-controls)를 켠 서버에서만 쓸 수 있습니다.");
+      if (q.cache !== "bypass" && q.cache !== "only") throw new HttpError(400, "cache는 bypass 또는 only여야 합니다.");
+      return q.cache;
+    };
+
     if (req.method === "GET") {
       if (parts[0] === "overview" && parts.length === 1) {
-        const body = await service.overview(normalizeFilters(q));
+        const body = await service.overview(normalizeFilters(q), cacheMode());
         return sendJson(res, 200, body, source(body));
       }
       if (parts[0] === "alerts" && parts.length === 1) {
@@ -572,6 +594,7 @@ function createServer(service, { control = null, port = 8001 } = {}) {
           status: normalizeStatusFilter(q.status),
           page: intParam(q.page, "page", 1, 1, 1_000_000),
           pageSize: intParam(q.pageSize, "pageSize", DEFAULT_PAGE_SIZE, 1, MAX_PAGE_SIZE),
+          mode: cacheMode(),
         });
         return sendJson(res, 200, body, source(body));
       }

@@ -68,10 +68,20 @@ export function createServiceApi(base = "api/v1", fetchFn = (...args) => fetch(.
     return body;
   }
 
+  /**
+   * 시연용 비교: 화면이 처음 열릴 때처럼 요약과 신호 목록을 함께 받아 걸린 시간을 잰다.
+   * cache "bypass"는 Redis를 거치지 않고 DBMS에서 계산한 것, "only"는 Redis에 있는 것만 (없으면 ApiError 404)
+   */
+  async function demoMeasure(cache) {
+    const startedAt = performance.now();
+    const [overview, list] = await Promise.all([get(`/overview?${toQuery({}, { cache })}`), get(`/alerts?${toQuery({}, { cache, pageSize: 1 })}`)]);
+    return { source: list.body.dataSource, total: overview.body.total, signals: list.body.counts?.all ?? list.body.total ?? 0, ms: Math.round(performance.now() - startedAt) };
+  }
+
   return {
-    demo: { state: demoState, stop: () => demoPost("stop"), start: () => demoPost("start") },
-    overview: (filters) => get(`/overview?${toQuery(filters)}`),
-    alerts: (filters, { status, page, pageSize } = {}) => get(`/alerts?${toQuery(filters, { status, page, pageSize })}`),
+    demo: { state: demoState, stop: () => demoPost("stop"), start: () => demoPost("start"), measure: demoMeasure },
+    overview: (filters, { cache } = {}) => get(`/overview?${toQuery(filters, { cache })}`),
+    alerts: (filters, { status, page, pageSize, cache } = {}) => get(`/alerts?${toQuery(filters, { status, page, pageSize, cache })}`),
     detail: (id, filters, evidencePage) => get(`/alerts/${encodeURIComponent(id)}?${toQuery(filters, { evidencePage })}`),
     history: (id) => get(`/alerts/${encodeURIComponent(id)}/status-history`),
 

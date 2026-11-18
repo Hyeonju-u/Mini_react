@@ -93,6 +93,18 @@ ul { padding: 0; list-style: none; }
 .btn-sm { height: 28px; padding: 0 12px; font-size: 13px; }
 .demo-message { font-size: 12px; line-height: 16px; color: var(--negative); }
 /* DBMS를 꺼 둔 동안 새 조회가 실패했을 때: 마지막 화면은 두고 이 안내만 */
+/* 시연용 가져오기 비교 (?log=1): DBMS 직접은 흐린 글자, Redis 캐시는 강조해서 시간 차이가 눈에 띄게 */
+.compare { padding: 16px; }
+.compare h2 { margin-bottom: 8px; }
+.compare-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.compare-rows { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; font-variant-numeric: tabular-nums; }
+.compare-rows li { display: grid; grid-template-columns: 72px 96px minmax(0, 1fr) auto; align-items: baseline; gap: 12px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 8px; font-size: 14px; line-height: 20px; }
+.compare-rows .c-at { color: var(--text-3); font-size: 12px; }
+.compare-rows .c-label { color: var(--text-2); }
+.compare-rows .c-ms { font-size: 18px; line-height: 24px; font-weight: 500; text-align: right; }
+.compare-rows .is-redis .c-ms, .compare-rows .is-redis .c-label { color: var(--accent); }
+.compare-rows .is-error { color: var(--negative); }
+.compare-rows .is-error .c-msg { grid-column: 3 / -1; }
 .stale-notice { padding: 8px 12px; font-size: 13px; line-height: 20px; color: var(--negative); border: 1px solid color-mix(in srgb, var(--negative) 50%, transparent); border-radius: 8px; }
 
 /* 표면: 카드 색 + 가는 선 */

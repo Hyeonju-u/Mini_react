@@ -258,6 +258,36 @@ export function EvidenceList({ alert, evidence, onPageChange }) {
   );
 }
 
+// ---------------------------------------------------------------- 시연용: 데이터 가져오기 비교 (?log=1, 시연 제어를 켠 서버에서만)
+// 같은 문의를 DBMS에서 직접 / Redis에서 가져올 때 걸리는 시간을 버튼으로 하나씩 눌러 비교한다. 상태는 가지지 않는다 (C-03)
+export function CompareBox({ rows, busy, onRun }) {
+  const button = (mode, idle, working) => h("button", { type: "button", class: "btn", disabled: Boolean(busy), onClick: () => onRun(mode) }, busy === mode ? working : idle);
+  return h(
+    "section",
+    { class: "panel compare", "aria-label": "데이터 가져오기 비교" },
+    h("h2", null, "데이터 가져오기 비교"),
+    h("div", { class: "compare-actions" }, button("bypass", "DBMS에서 가져오기", "DBMS에서 가져오는 중…"), button("only", "Redis에서 가져오기", "Redis에서 가져오는 중…")),
+    rows.length === 0
+      ? h("p", { class: "muted" }, "버튼을 눌러 같은 데이터를 어디서 가져오느냐에 따라 걸리는 시간을 비교합니다. 먼저 DBMS에서 가져오면 그 결과가 Redis에 저장됩니다.")
+      : h(
+          "ul",
+          { class: "compare-rows", "aria-label": "가져오기 기록" },
+          rows.map((r) =>
+            r.error
+              ? h("li", { class: "is-error" }, h("span", { class: "c-at" }, r.at), h("span", { class: "c-label" }, SERVED_LABEL[r.mode === "only" ? "redis" : "dbms"]), h("span", { class: "c-msg" }, r.error))
+              : h(
+                  "li",
+                  { class: `is-${r.source}` },
+                  h("span", { class: "c-at" }, r.at),
+                  h("span", { class: "c-label" }, SERVED_LABEL[r.source]),
+                  h("span", { class: "c-msg" }, `문의 ${r.total.toLocaleString("ko-KR")}건 · 이상 신호 ${r.signals.toLocaleString("ko-KR")}개`),
+                  h("span", { class: "c-ms" }, `${r.ms.toLocaleString("ko-KR")}ms`),
+                ),
+          ),
+        ),
+  );
+}
+
 // ---------------------------------------------------------------- ⑥ ProgressPanel (F-08, R-14)
 // props는 정의서의 alertId, currentStatus, history, onStatusChange에 저장 상태를 보여주는 persisted, saving, notice를 더했다.
 // persisted: DB에 저장되는 모드인가 / saving: 저장 요청을 기다리는 중인가 / notice: 저장 실패 안내. 상태는 가지지 않는다 (C-03).

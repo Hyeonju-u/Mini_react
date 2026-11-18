@@ -53,6 +53,9 @@ export function formatKst(iso) {
   return new Date(ms + KST_OFFSET_MS).toISOString().slice(0, 16).replace("T", " ");
 }
 
+/** UTC ISO 시각 → 한국 시간 "HH:MM:SS" (기록 줄에 붙이는 시계) */
+export const clockKst = (iso) => new Date(Date.parse(iso) + KST_OFFSET_MS).toISOString().slice(11, 19);
+
 export const formatHour = (hour) => {
   const k = toKstHour(hour);
   return `${k.slice(0, 10)} ${k.slice(11)}:00`;

@@ -2,10 +2,10 @@
 // 상태와 Hook은 여기에만 둔다 (C-01, C-02). 자식 컴포넌트는 props로만 받는다 (C-03 Lifting State Up).
 import { h, FunctionComponent, useState, useEffect, useMemo, batch } from "../mini-react.js";
 import { CONFIG } from "./config.js";
-import { hourRange, filterInquiries, detectAlerts, sinceHour, inPeriod, summarize } from "./analysis.js";
+import { hourRange, filterInquiries, detectAlerts, sinceHour, inPeriod, summarize, clockKst } from "./analysis.js";
 import { paginate } from "./pagination.js";
 import { loadDataset, appVersionsOf } from "./data.js";
-import { Header, FilterBar, SummaryCard, SignalList, SignalDetail, ProgressPanel } from "./components.js";
+import { Header, FilterBar, SummaryCard, SignalList, SignalDetail, ProgressPanel, CompareBox } from "./components.js";
 import { currentStatus, appendStatus, isUnresolved } from "./status.js";
 
 // props: dataUrl(데이터 위치), load(불러오기 함수), now(상태를 바꾼 시각을 만드는 함수).
@@ -15,7 +15,8 @@ import { currentStatus, appendStatus, isUnresolved } from "./status.js";
 // api(Step 4)를 넣으면 통합 모드다: 문의 전체를 받지 않고, 필터·탐지·집계·근거 페이지를 서비스 API(/api/v1)가 계산해서 결과만 보낸다.
 // 이때 load·loadHistory·saveStatus는 쓰지 않고 api가 대신한다. 샘플 모드(api 없음)는 예전처럼 브라우저에서 계산한다.
 // refreshMs(통합 모드 전용)를 넣으면 그 간격(ms)마다 서버에서 다시 받아 새로 접수된 문의가 화면에 반영된다. 0이면 자동 갱신 없음(기본)
-export function App({ dataUrl = "data/inquiries.sample.json", load = loadDataset, now = () => new Date().toISOString(), loadHistory, saveStatus: saveStatusProp, api, refreshMs = 0 } = {}) {
+// compare(통합 모드 전용, 시연용): true면 "데이터 가져오기 비교" 상자를 그린다 (DBMS 직접 / Redis만 가져오는 시간을 버튼으로 비교). 서비스가 시연 제어를 켠 경우에만 보인다
+export function App({ dataUrl = "data/inquiries.sample.json", load = loadDataset, now = () => new Date().toISOString(), loadHistory, saveStatus: saveStatusProp, api, refreshMs = 0, compare = false } = {}) {
   const saveStatus = api ? api.saveStatus : saveStatusProp;
   // ---- 필터 (R-03, F-07)
   const [query, setQuery] = useState("");
@@ -255,6 +256,18 @@ export function App({ dataUrl = "data/inquiries.sample.json", load = loadDataset
     );
   };
 
+  // 시연용 가져오기 비교: 버튼을 누르면 DBMS 직접(bypass) 또는 Redis만(only)으로 같은 데이터를 받아 걸린 시간을 기록 줄로 쌓는다 (최근 6줄)
+  const [cmp, setCmp] = useState({ rows: [], busy: "" });
+  const onCompare = (mode) => {
+    if (cmp.busy) return;
+    setCmp((c) => ({ ...c, busy: mode }));
+    const at = clockKst(now());
+    api.demo.measure(mode).then(
+      (result) => setCmp((c) => ({ busy: "", rows: [{ at, mode, ...result }, ...c.rows].slice(0, 6) })),
+      (error) => setCmp((c) => ({ busy: "", rows: [{ at, mode, error: error.message }, ...c.rows].slice(0, 6) })),
+    );
+  };
+
   // 시연용 DBMS 종료·시작: 서비스가 프로세스를 대신 다룬다. 종료는 강제 종료(SIGKILL)라 데이터 파일은 그대로 남는다
   const onDbmsStop = () => {
     if (demo.busy) return;
@@ -289,6 +302,7 @@ export function App({ dataUrl = "data/inquiries.sample.json", load = loadDataset
     }),
     stale ? h("p", { class: "stale-notice", role: "status" }, stale) : null,
     h(SummaryCard, { summary: view.summary, alertCounts: view.alertCounts, ...statusProps }),
+    api && compare && demo.enabled && api.demo?.measure ? h(CompareBox, { rows: cmp.rows, busy: cmp.busy, onRun: onCompare }) : null,
     // 진행 현황(상태 바꾸기)은 문의 요약과 신호 목록 사이에 둔다: 시연할 때 맨 아래까지 내려갔다 올라오지 않게
     view.loadState.status === "ready" && view.selectedId !== null
       ? h(ProgressPanel, {

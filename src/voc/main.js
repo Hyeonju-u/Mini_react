@@ -9,5 +9,7 @@ const useSample = new URLSearchParams(location.search).get("source") === "sample
 // 통합 모드는 10초마다 자동으로 다시 받는다. ?refresh=초 로 바꿀 수 있고 0이면 끈다 (시험·시연용)
 const refreshParam = new URLSearchParams(location.search).get("refresh");
 const refreshSeconds = /^\d{1,3}$/.test(refreshParam ?? "") ? Number(refreshParam) : 10;
-const props = useSample ? { dataUrl: "data/inquiries.sample.json" } : { api: createServiceApi("api/v1"), refreshMs: refreshSeconds * 1000 };
+// ?log=1 을 붙이면 "DBMS에서 / Redis에서 가져오기" 비교 상자가 나온다 (서비스를 시연 제어로 켰을 때만 동작하는 시연용)
+const compare = new URLSearchParams(location.search).get("log") === "1";
+const props = useSample ? { dataUrl: "data/inquiries.sample.json" } : { api: createServiceApi("api/v1"), refreshMs: refreshSeconds * 1000, compare };
 mountApp(document.getElementById("app"), props);

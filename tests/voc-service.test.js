@@ -131,6 +131,28 @@ describe("API 클라이언트 (service-api.js)", () => {
     assert(/HTTP 400/.test(msgs[1]) && /period/.test(msgs[1]));
     assert(/JSON/.test(msgs[2]));
   });
+  it("cache 옵션: 조회 주소에 붙고, 가져오기 비교(demo.measure)는 요약과 목록을 함께 받아 출처·건수·시간을 돌려준다", async () => {
+    const urls = [];
+    const fake = async (url) => {
+      urls.push(url);
+      const body = url.includes("/alerts") ? { alerts: [], counts: { all: 1883, unresolved: 1883 }, dataSource: "redis" } : { total: 100000, dataSource: "redis" };
+      return { ok: true, status: 200, json: async () => body };
+    };
+    const api = createServiceApi("api/v1", fake);
+    await api.overview({}, { cache: "bypass" });
+    await api.alerts({}, { pageSize: 1, cache: "only" });
+    eq(urls[0], "api/v1/overview?cache=bypass");
+    eq(urls[1], "api/v1/alerts?pageSize=1&cache=only");
+    urls.length = 0;
+    const result = await api.demo.measure("only");
+    deepEq({ source: result.source, total: result.total, signals: result.signals }, { source: "redis", total: 100000, signals: 1883 });
+    assert(Number.isInteger(result.ms) && result.ms >= 0);
+    assert(urls.includes("api/v1/overview?cache=only") && urls.includes("api/v1/alerts?cache=only&pageSize=1"), urls.join(" "));
+  });
+  it("가져오기 비교가 Redis에 없다는 응답(404)이면 사람이 읽을 수 있는 ApiError", async () => {
+    const api = createServiceApi("api/v1", async () => ({ ok: false, status: 404, json: async () => ({ error: "Redis에 아직 없습니다. 먼저 DBMS에서 가져오세요.", outcome: "cache_miss" }) }));
+    try { await api.demo.measure("only"); assert(false, "성공?!"); } catch (e) { assert(e instanceof ApiError && e.status === 404 && /Redis에 아직 없습니다/.test(e.message), e.message); }
+  });
   it("상태 저장: 201이면 { status, at }, 요청 거절은 not_saved, 서버 오류·연결 끊김은 unknown", async () => {
     eq((await createServiceApi("api/v1", reply(201, { alertId: "x", status: "분석 중", at: "2026-11-09T00:00:00.000Z" })).saveStatus("x", "분석 중")).status, "분석 중");
     const outcomes = [];
@@ -189,6 +211,12 @@ function fakeService(data, { statuses = {}, save, demo } = {}) {
               dbms.running = true;
               return { enabled: true, running: true };
             },
+            // 가져오기 비교: bypass = DBMS 직접, only = Redis만. demo.measure로 바꿔 끼울 수 있다 (지연·실패 시험)
+            measure: async (mode) => {
+              calls.demo.push(`measure:${mode}`);
+              if (demo.measure) return demo.measure(mode);
+              return { source: mode === "only" ? "redis" : "dbms", total: data.inquiries.length, signals: 28, ms: mode === "only" ? 3 : 1234 };
+            },
           },
         }
       : {}),
@@ -196,14 +224,14 @@ function fakeService(data, { statuses = {}, save, demo } = {}) {
   return { api, calls, map, gate, dbms };
 }
 
-async function withRemote(fn, { statuses, save, refreshMs, dataset, demo } = {}) {
+async function withRemote(fn, { statuses, save, refreshMs, dataset, demo, compare } = {}) {
   const data = dataset ?? (await loadSample());
   const box = document.createElement("div");
   sandbox.appendChild(box);
   let service;
   try {
     service = fakeService(data, { statuses, save, demo });
-    const c = mountApp(box, { api: service.api, refreshMs });
+    const c = mountApp(box, { api: service.api, refreshMs, compare });
     await settle();
     await fn({ box, data, ...service, $: (s) => box.querySelector(s), $$: (s) => [...box.querySelectorAll(s)] });
   } finally {
@@ -370,6 +398,64 @@ describe("통합 모드 화면 (App의 api prop, S4-04 · S4-14)", () => {
     } finally {
       box.remove();
     }
+  });
+});
+
+describe("시연용 가져오기 비교 상자 (?log=1, 시연 제어를 켠 서버에서만)", () => {
+  const run = (box, label) => [...box.querySelectorAll(".compare-actions button")].find((b) => b.textContent.startsWith(label)).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  const rows = (box) => [...box.querySelectorAll(".compare-rows li")].map((li) => text(li));
+  it("기본으로는 보이지 않고, 시연 제어가 없으면 compare를 켜도 보이지 않는다", async () => {
+    await withRemote(({ $ }) => assert($(".compare") === null), { demo: { running: true } });
+    await withRemote(({ $ }) => assert($(".compare") === null), { compare: true });
+  });
+  it("compare와 시연 제어가 모두 있으면 두 버튼과 안내가 보인다 (요약과 진행 현황 사이)", async () => {
+    await withRemote(({ box, $, $$ }) => {
+      assert($(".compare") !== null);
+      deepEq($$(".compare-actions button").map((b) => b.textContent), ["DBMS에서 가져오기", "Redis에서 가져오기"]);
+      assert(text($(".compare")).includes("먼저 DBMS에서 가져오면"));
+      const order = [...box.querySelector(".app").children].map((e) => e.getAttribute("aria-label") ?? e.className.split(" ")[0]);
+      assert(order.indexOf("데이터 가져오기 비교") === order.indexOf("요약") + 1 && order.indexOf("진행 현황") === order.indexOf("데이터 가져오기 비교") + 1, order.join(">"));
+    }, { demo: { running: true }, compare: true });
+  });
+  it("DBMS 버튼: 가져오는 동안 두 버튼이 잠기고, 끝나면 'DBMS 직접'과 건수·신호·시간이 한 줄로 쌓인다", async () => {
+    let finish;
+    await withRemote(async ({ box, $$, calls }) => {
+      run(box, "DBMS에서");
+      await settle();
+      deepEq($$(".compare-actions button").map((b) => b.textContent), ["DBMS에서 가져오는 중…", "Redis에서 가져오기"]);
+      assert($$(".compare-actions button").every((b) => b.disabled), "가져오는 동안은 잠긴다");
+      assert(calls.demo.includes("measure:bypass"));
+      finish({ source: "dbms", total: 100000, signals: 1883, ms: 7926 });
+      await settle();
+      assert($$(".compare-actions button").every((b) => !b.disabled));
+      const [line] = rows(box);
+      assert(/DBMS 직접/.test(line) && line.includes("문의 100,000건 · 이상 신호 1,883개") && line.includes("7,926ms"), line);
+    }, { demo: { running: true, measure: () => new Promise((resolve) => { finish = resolve; }) }, compare: true });
+  });
+  it("Redis 버튼: 'Redis 캐시' 줄이 위에 쌓이고, Redis에 없으면 이유가 줄로 나온다", async () => {
+    await withRemote(async ({ box }) => {
+      run(box, "DBMS에서");
+      await settle();
+      run(box, "Redis에서");
+      await settle();
+      const lines = rows(box);
+      eq(lines.length, 2);
+      assert(/Redis 캐시/.test(lines[0]) && lines[0].includes("3ms") && /DBMS 직접/.test(lines[1]) && lines[1].includes("1,234ms"), lines.join(" / "));
+    }, { demo: { running: true }, compare: true });
+    await withRemote(async ({ box, $ }) => {
+      run(box, "Redis에서");
+      await settle();
+      assert(text($(".compare-rows .is-error")).includes("Redis에 아직 없습니다"), "없으면 가짜 숫자 대신 이유");
+    }, { demo: { running: true, measure: async () => { throw new ApiError("데이터를 불러오지 못했습니다. (HTTP 404) Redis에 아직 없습니다. 먼저 DBMS에서 가져오세요.", 404); } }, compare: true });
+  });
+  it("기록은 최근 6줄까지만 남는다", async () => {
+    await withRemote(async ({ box }) => {
+      for (let i = 0; i < 8; i++) {
+        run(box, "Redis에서");
+        await settle();
+      }
+      eq(rows(box).length, 6);
+    }, { demo: { running: true }, compare: true });
   });
 });
 

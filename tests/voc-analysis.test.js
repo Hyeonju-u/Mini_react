@@ -1,7 +1,7 @@
 // 고객 문의(VOC) 이상 탐지 로직 단위 테스트 (순수 함수): 시간·필터·요약·4신호 탐지·정규화·페이지·데이터 불러오기·샘플 정답지
 import { describe, it, assert, eq, deepEq, throws } from "./runner.js";
 import {
-  hourOf, eachHour, hourRange, toKstHour, formatKst, formatHour, formatRange, formatRangeShort, filterInquiries, sinceHour, inPeriod, summarize,
+  hourOf, eachHour, hourRange, toKstHour, formatKst, clockKst, formatHour, formatRange, formatRangeShort, filterInquiries, sinceHour, inPeriod, summarize,
   normalizePhrase, highlightSegments, detectAlerts,
 } from "../src/voc/analysis.js";
 import { paginate, pageWindow } from "../src/voc/pagination.js";
@@ -56,6 +56,7 @@ describe("시간 도우미", () => {
     eq(formatKst("2026-11-09T15:30:00.000Z"), "2026-11-10 00:30");
     eq(formatKst("2026-11-09T14:59:59Z"), "2026-11-09 23:59");
     eq(formatKst("not-a-date"), "not-a-date", "읽을 수 없으면 그대로 보여 준다");
+    eq(clockKst("2026-11-09T15:30:45.000Z"), "00:30:45", "기록 줄의 시계는 한국 시간 시:분:초");
   });
 
   it("formatHour · formatRange (한국 시간으로 표시): 같은 시각 / 같은 날 / 날짜가 다른 경우", () => {
