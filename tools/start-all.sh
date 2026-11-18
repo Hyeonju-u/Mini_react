@@ -40,7 +40,7 @@ done
 
 # ---- 준비 (처음 한 번)
 [ -x "$DB_BIN" ] || { echo "DBMS 빌드 중..."; make -C dbms >"$LOG_DIR/build-dbms.log" 2>&1 || fail "DBMS 빌드 실패: $LOG_DIR/build-dbms.log"; }
-[ -d "$DATA_DIR" ] || { echo "문의 1만 건 적재 중..."; python3 db/load_sample.py --data-dir "$DATA_DIR" || fail "데이터 적재 실패"; }
+[ -d "$DATA_DIR" ] || { echo "문의 10만 건(6개월) 만들어 적재 중... (약 2초)"; python3 db/load_sample.py --data-dir "$DATA_DIR" || fail "데이터 적재 실패"; }
 if [ -z "${NO_REDIS:-}" ]; then
   [ -x "$REDIS_BIN" ] || { echo "Redis 빌드 중..."; make -C redis >"$LOG_DIR/build-redis.log" 2>&1 || fail "Redis 빌드 실패: $LOG_DIR/build-redis.log"; }
   mkdir -p redis/data

@@ -50,7 +50,7 @@ node scripts/generate-sample.cjs --count 5000     # 건수·시드·기준일 �
 
 ```bash
 make -C dbms                       # Mini DBMS 빌드
-python3 db/load_sample.py          # db/data/ 에 문의 1만 건 적재 (원본과 대조해 확인한다). 3,000건은 --sample data/inquiries.sample.json
+python3 db/load_sample.py          # db/data/ 에 문의 10만 건(6개월)을 생성기로 만들어 적재 (원본과 대조해 확인한다, 약 2초). 1만 건은 --sample data/inquiries.large.json, 3,000건은 --sample data/inquiries.sample.json
 export MINIDB_TOKEN='아무_비밀_문자열'   # DBMS 서버와 서비스에 같은 값을 쓴다 (터미널마다 export)
 ./dbms/reliable/build/mini-db-server --data-dir db/data --port 8080     # 터미널 1: DBMS 서버
 node tools/voc-service.mjs                                              # 터미널 2: VOC 서비스 (Mini Redis는 아래 절)
@@ -95,7 +95,7 @@ node tools/voc-service.mjs                                              # 터미
 | 파일 | 하는 일 |
 | --- | --- |
 | `서버 켜기.command` | DBMS + Redis + VOC 서비스를 켠다. 이미 켜져 있으면 화면만 연다 |
-| `시연 켜기.command` | 위에 더해 접수 시연을 켠다: 시작할 때 '배송' 25건이 들어와 새 이상 신호가 생기고, 그 뒤 문의가 평균 30초에 1건씩 들어온다 |
+| `시연 켜기.command` | 위에 더해 접수 시연을 켠다: 시작할 때 '배송' 25건이 들어와 새 이상 신호가 생기고 접수는 거기서 끝난다. 문의가 평균 30초에 1건씩 계속 들어오게 하려면 `SIMULATE_ARGS="--burst 배송" "./시연 켜기.command"` (문의가 들어올 때마다 Redis 캐시가 비워진다) |
 
 끄려면 그 터미널 창에서 Ctrl-C를 누르거나 창을 닫는다 (창을 닫아도 서버가 함께 꺼진다). 처음 열 때 macOS가 "확인되지 않은 개발자"라고 막으면 파일을 우클릭 → 열기를 한 번 하면 된다.
 
@@ -115,11 +115,11 @@ python3 tools/simulate-intake.py --burst 배송 --burst-device Android --burst-o
 python3 tools/simulate-intake.py --count 5 --interval 10    # 10초마다 5건만
 ```
 
-  평소 접수는 일부러 드물게 했다(기본 평균 30초에 1건). 이 데이터는 14일에 1만 건, 평균 2분에 1건 꼴이라 시연에서는 그보다 조금 빠른 정도다. 새 문의는 DBMS에서 읽은 평소 문의 1,500건 중 하나를 골라 지금 시각으로 저장한다 (생성 데이터이며 실제 고객 문구가 아니다).
+  평소 접수는 일부러 드물게 했다(기본 평균 30초에 1건). 기본 데이터(6개월에 10만 건)는 평균 2.6분에 1건 꼴이라 시연에서는 그보다 조금 빠른 정도다. 새 문의는 DBMS에서 읽은 평소 문의 1,500건 중 하나를 골라 지금 시각으로 저장한다 (생성 데이터이며 실제 고객 문구가 아니다).
   - 토큰은 환경변수 `MINIDB_TOKEN`, 없으면 `./tools/start-all.sh`가 남긴 파일(끌 때 지워진다)에서 읽는다.
-  - **실제 `db/data`에 문의가 추가된다.** 되돌리려면 서버를 끄고 `db/data`를 옮긴 뒤 `python3 db/load_sample.py`로 다시 적재한다. 접수 번호가 1만 건 다음 번호가 아니라 건너뛰는 것은 DBMS가 ID를 4096개씩 미리 예약하기 때문이다.
-  - 접수 시각은 "지금"이다 (DB에는 UTC로 저장되고, 화면에는 한국 시간으로 보인다). 데이터가 10/27~11/9라서 `최근 24시간` 같은 기간 필터는 지금 시각 기준으로 바뀐다. `전체 기간`에서는 예전 신호가 그대로 보인다.
-  - 확인한 결과(복사본 DB, 화면을 2초 간격으로 갱신): 문의 10,003 → 10,004건(평소 접수 1건) → 10,030건(`배송`·Android 급증 25건)으로 바뀌고, 신호가 28개 → 31개가 되며 맨 위에 `문의 급증 배송 · 평소의 26.0배`가 나타났다. 출처 배지는 새 문의가 있던 갱신에서만 `DBMS 직접`이었다.
+  - **실제 `db/data`에 문의가 추가된다.** 되돌리려면 서버를 끄고 `db/data`를 옮긴 뒤 `python3 db/load_sample.py`로 다시 적재한다. 접수 번호가 문의 건수 다음 번호가 아니라 건너뛰는 것은 DBMS가 ID를 4096개씩 미리 예약하기 때문이다.
+  - 접수 시각은 "지금"이다 (DB에는 UTC로 저장되고, 화면에는 한국 시간으로 보인다). 기본 데이터는 6개월치(마지막 날 11/9)라서 `최근 24시간` 같은 기간 필터는 지금 시각 기준으로 바뀐다. `전체 기간`에서는 예전 신호가 그대로 보인다.
+  - 확인한 결과(문의 1만 건·14일 데이터였을 때, 복사본 DB, 화면을 2초 간격으로 갱신): 문의 10,003 → 10,004건(평소 접수 1건) → 10,030건(`배송`·Android 급증 25건)으로 바뀌고, 신호가 28개 → 31개가 되며 맨 위에 `문의 급증 배송 · 평소의 26.0배`가 나타났다. 출처 배지는 새 문의가 있던 갱신에서만 `DBMS 직접`이었다.
   - DBMS가 꺼져 있는 동안에는 접수를 건너뛰고(안내는 한 번만), 다시 켜지면 이어서 접수한다 (복사본 DB에서 접수 도중 DBMS를 껐다 켜서 확인했다).
 
 ### 장애 복구 시연: 화면의 `DBMS 종료` / `DBMS 시작` 버튼
@@ -616,7 +616,7 @@ Step 4는 Step 4 요구사항 정의서의 결정(2026-11-17 확정, [`docs/step
 │   ├── style.css           Phase 1 검증 페이지
 │   └── voc.css             문의 탐지 페이지
 ├── data/inquiries.sample.json   공용 샘플 문의 3,000건 (생성 데이터). 화면 테스트와 샘플 모드가 쓴다
-├── data/inquiries.large.json    DB용 문의 1만 건 (같은 생성기: --count 10000). load_sample.py의 기본 입력
+├── data/inquiries.large.json    문의 1만 건·14일 (같은 생성기: --count 10000). load_sample.py --sample 로 고른다. 기본 데이터(10만 건·6개월)는 파일 없이 생성기가 그 자리에서 만든다 (--count 100000 --days 180 --even 1)
 ├── home.html               프로젝트 지도와 바로가기 (중계기 :8001/home.html)
 ├── scripts/generate-sample.cjs  샘플 생성기 (시드 고정, 시나리오 6개)
 ├── db/                     Mini DBMS 테이블 정의(*.schema)와 샘플 적재 스크립트(load_sample.py)

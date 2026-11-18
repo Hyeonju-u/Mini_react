@@ -20,7 +20,8 @@ const SEED = Number(args.seed ?? 20261109);
 const COUNT = Number(args.count ?? 3000);
 const UNTIL = args.until ?? "2026-11-09"; // 마지막 날짜 (이 날짜 포함, UTC)
 const OUT = args.out ?? path.join(__dirname, "..", "data", "inquiries.sample.json");
-const DAYS = 14;
+const DAYS = Number(args.days ?? 14); // 평소 문의를 펼치는 기간(일). 시나리오는 항상 마지막 5일 안에 있다
+const EVEN = args.even === "1"; // 평소 문의의 건수·유형·기기·버전을 무작위 대신 고르게 배정한다 (아래 「평소 문의」)
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 
@@ -146,13 +147,65 @@ const baseTotal = COUNT - extraTotal;
 if (baseTotal < 300) throw new Error("--count가 너무 작습니다. (시나리오만 " + extraTotal + "건)");
 
 // 평소 문의: 날짜는 고르게, 시각은 비중대로
-for (let i = 0; i < baseTotal; i++) {
-  const daysBefore = int(0, DAYS - 1);
-  const hour = pickWeighted(HOUR_WEIGHTS);
-  const category = pickWeighted(CATEGORY_WEIGHTS);
-  const device = pickWeighted(DEVICE_WEIGHTS);
-  const ms = dayStart(daysBefore) + hour * HOUR_MS + int(0, 3599) * 1000;
-  addRow(category, baseText(category), device, versionFor(device, daysBefore), ms);
+if (!EVEN) {
+  for (let i = 0; i < baseTotal; i++) {
+    const daysBefore = int(0, DAYS - 1);
+    const hour = pickWeighted(HOUR_WEIGHTS);
+    const category = pickWeighted(CATEGORY_WEIGHTS);
+    const device = pickWeighted(DEVICE_WEIGHTS);
+    const ms = dayStart(daysBefore) + hour * HOUR_MS + int(0, 3599) * 1000;
+    addRow(category, baseText(category), device, versionFor(device, daysBefore), ms);
+  }
+} else {
+  // --even 1: 건수가 많거나 기간이 길면 무작위 배정만으로도 어느 시간대에 우연히 한 유형이 몰려서 "이상 신호"로 잡힌다.
+  // 그래서 날짜×시각 칸마다 건수를 거의 같게 나누고(오차는 다음 칸으로 넘긴다), 칸 안의 유형·기기·버전·문장도 비중대로 번갈아 배정한다.
+  // 우연한 쏠림이 없으니 이상 신호는 아래 시나리오가 심은 것만 나온다.
+  const smooth = (weights) => {
+    // 비중대로 번갈아 고르는 방식(smooth weighted round-robin): 매번 가장 모자란 항목을 고른다
+    const acc = new Map(weights.map(([value]) => [value, 0]));
+    return () => {
+      let best = null;
+      for (const [value, weight] of weights) {
+        acc.set(value, acc.get(value) + weight);
+        if (best === null || acc.get(value) > acc.get(best)) best = value;
+      }
+      acc.set(best, acc.get(best) - 1);
+      return best;
+    };
+  };
+  const nextCategory = smooth(CATEGORY_WEIGHTS);
+  const nextDevice = smooth(DEVICE_WEIGHTS);
+  const nextVersionRecent = smooth([["4.2.0", 0.15], ["4.3.0", 0.45], ["4.4.0", 0.4]]);
+  const nextVersionOld = smooth([["4.2.0", 0.3], ["4.3.0", 0.7]]);
+  const textCursor = new Map(Object.keys(BASE_TEXTS).map((c) => [c, 0]));
+  const evenText = (category) => {
+    const list = BASE_TEXTS[category];
+    const i = textCursor.get(category);
+    textCursor.set(category, i + 1);
+    return random() < 0.4 ? `${list[i % list.length]} 주문번호 ${orderNo()}` : list[i % list.length];
+  };
+  const buckets = []; // [daysBefore, hour, 건수]
+  const hourWeightSum = HOUR_WEIGHTS.reduce((sum, [, w]) => sum + w, 0); // 시각별 비중의 합이 1이 아니라서 나눠 준다
+  let carry = 0;
+  let made = 0;
+  for (let daysBefore = DAYS - 1; daysBefore >= 0; daysBefore--) {
+    for (const [hour, weight] of HOUR_WEIGHTS) {
+      const exact = (baseTotal * weight) / hourWeightSum / DAYS + carry;
+      const n = Math.round(exact);
+      carry = exact - n;
+      buckets.push([daysBefore, hour, n]);
+      made += n;
+    }
+  }
+  buckets.at(-1)[2] += baseTotal - made; // 합계가 정확히 baseTotal이 되도록 마지막 칸에서 맞춘다 (반올림 오차 몇 건)
+  for (const [daysBefore, hour, n] of buckets) {
+    for (let k = 0; k < n; k++) {
+      const category = nextCategory();
+      const device = nextDevice();
+      const version = device === "Web" ? "web" : (daysBefore <= VERSION_RELEASE_DAYS_BEFORE_UNTIL ? nextVersionRecent() : nextVersionOld());
+      addRow(category, evenText(category), device, version, dayStart(daysBefore) + hour * HOUR_MS + int(0, 3599) * 1000);
+    }
+  }
 }
 
 // 시나리오: 정해진 시각에 정확한 건수

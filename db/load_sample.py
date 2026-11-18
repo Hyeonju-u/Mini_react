@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""문의 JSON을 Mini DBMS 데이터 폴더로 만든다. 기본은 1만 건(data/inquiries.large.json)이다.
+"""문의 JSON을 Mini DBMS 데이터 폴더로 만든다. 기본은 문의 10만 건(6개월)이다.
 
 하는 일:
   1. 데이터 폴더를 새로 만들고 테이블 정의(*.schema)와 빈 CSV를 둔다
@@ -7,11 +7,16 @@
   3. 넣은 내용을 다시 읽어 원본과 한 건도 다르지 않은지 확인한다
 
 사용법 (저장소 루트에서, 먼저 `make -C dbms`로 빌드):
-  python3 db/load_sample.py                    # db/data/ 에 문의 1만 건을 만든다
+  python3 db/load_sample.py                    # db/data/ 에 문의 10만 건을 만든다 (생성기로 그 자리에서 만들어 넣는다, 약 2초)
+  python3 db/load_sample.py --sample data/inquiries.large.json    # 1만 건(14일)으로 만든다
   python3 db/load_sample.py --sample data/inquiries.sample.json   # 공용 샘플 3,000건으로 만든다
   python3 db/load_sample.py --data-dir /경로   # 다른 곳에 만든다
 
-1만 건 파일은 같은 생성기로 만든다: node scripts/generate-sample.cjs --count 10000 --out data/inquiries.large.json
+10만 건은 같은 생성기로 만든다 (같은 시드라 매번 같은 데이터가 나온다. node가 필요하다):
+  node scripts/generate-sample.cjs --count 100000 --days 180 --even 1 --out 파일.json
+  --days 180: 평소 문의를 6개월에 펼친다 (한 시간당 건수는 14일 1만 건과 비슷해서 현실적인 밀도다)
+  --even 1:   평소 문의를 무작위 대신 고르게 배정한다. 무작위로 하면 건수가 많을수록 우연히 한 유형이 몰린 시간대가
+              "이상 신호"로 잡혀서, 이상 신호는 시나리오가 심은 것만 나오게 한다
 
 이미 내용이 있는 폴더는 덮어쓰지 않고 멈춘다.
 문의 ID는 DBMS가 1부터 순서대로 발급한다 (샘플의 id와 같은 순서로 넣으므로 같은 번호가 된다).
@@ -104,10 +109,28 @@ def invalidate_service_cache():
         print("참고: VOC 서비스가 꺼져 있어 캐시 비우기는 건너뜁니다 (서비스는 켤 때 새 세대로 시작합니다)")
 
 
+DEFAULT_COUNT = 100000  # 기본 데이터: 문의 10만 건을
+DEFAULT_DAYS = 180      # 6개월에 펼친다
+
+
+def generate_default(tmp_dir):
+    """기본 데이터(10만 건·6개월·고르게 배정)를 생성기로 임시 폴더에 만들고 그 경로를 돌려준다. 같은 시드라 매번 같은 데이터다"""
+    node = shutil.which("node")
+    if not node:
+        fail("기본 데이터(문의 10만 건)를 만들려면 node가 필요합니다. node를 설치하거나 --sample data/inquiries.large.json 으로 1만 건을 쓰세요")
+    out = Path(tmp_dir) / "inquiries.default.json"
+    result = subprocess.run(
+        [node, str(ROOT / "scripts" / "generate-sample.cjs"), "--count", str(DEFAULT_COUNT), "--days", str(DEFAULT_DAYS), "--even", "1", "--out", str(out)],
+        capture_output=True, text=True)
+    if result.returncode != 0:
+        fail(f"문의 데이터를 만들지 못했습니다\n  {result.stderr.strip()}")
+    return out
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--data-dir", type=Path, default=HERE / "data", help="만들 DB 데이터 폴더 (기본: db/data)")
-    parser.add_argument("--sample", type=Path, default=ROOT / "data" / "inquiries.large.json", help="문의 JSON (기본: 1만 건)")
+    parser.add_argument("--sample", type=Path, default=None, help="문의 JSON (기본: 생성기로 만든 10만 건)")
     args = parser.parse_args()
 
     if not MINI_DB.exists():
@@ -116,19 +139,20 @@ def main():
     if data_dir.exists() and any(data_dir.iterdir()):
         fail(f"{data_dir} 에 이미 파일이 있습니다. 덮어쓰지 않습니다. 다른 --data-dir을 쓰거나 폴더를 직접 지우세요")
 
-    rows = load_rows(args.sample)
-    data_dir.mkdir(parents=True, exist_ok=True)
-    for table in TABLES:
-        shutil.copy(HERE / f"{table}.schema", data_dir / f"{table}.schema")
-        (data_dir / f"{table}.csv").touch()  # 처음에는 빈 파일
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        rows = load_rows(args.sample or generate_default(tmp_dir))
+        data_dir.mkdir(parents=True, exist_ok=True)
+        for table in TABLES:
+            shutil.copy(HERE / f"{table}.schema", data_dir / f"{table}.schema")
+            (data_dir / f"{table}.csv").touch()  # 처음에는 빈 파일
 
-    with tempfile.NamedTemporaryFile("w", suffix=".sql", encoding="utf-8") as sql_file:
-        sql_file.write(build_sql(rows))
-        sql_file.flush()
-        run_mini_db(data_dir, "--file", sql_file.name)
+        with tempfile.NamedTemporaryFile("w", suffix=".sql", encoding="utf-8") as sql_file:
+            sql_file.write(build_sql(rows))
+            sql_file.flush()
+            run_mini_db(data_dir, "--file", sql_file.name)
 
-    if not verify(data_dir, rows):
-        fail("DB에서 다시 읽은 내용이 원본과 다릅니다")
+        if not verify(data_dir, rows):
+            fail("DB에서 다시 읽은 내용이 원본과 다릅니다")
     print(f"완료: 문의 {len(rows)}건을 {data_dir} 에 넣고 원본과 일치함을 확인했습니다")
     invalidate_service_cache()
 
